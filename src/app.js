@@ -16,7 +16,8 @@ import alertRoutes from "./routes/alert.routes.js";
 import commitRoutes from "./routes/commit.routes.js";
 import githubRoutes from "./routes/github.routes.js";
 import graphRoutes from "./routes/graph.routes.js";
-import fixRoutes from "./routes/fix.routes.js"; // ✅ NEW (Fix Suggestion API)
+import fixRoutes from "./routes/fix.routes.js";
+import reportRoutes from "./routes/report.routes.js"; // ✅ NEW (Report API)
 
 import { errorMiddleware } from "./middleware/error.middleware.js";
 
@@ -56,16 +57,18 @@ app.use("/api/alerts", alertRoutes);
 app.use("/api/commits", commitRoutes);
 app.use("/api/github", githubRoutes);
 app.use("/api/graph", graphRoutes);
-app.use("/api/fix", fixRoutes); // ✅ NEW
+app.use("/api/fix", fixRoutes);
+app.use("/api/report", reportRoutes); // ✅ NEW
 
 /* =========================
-   🧪 HEALTH CHECK (IMPORTANT 🔥)
+   🧪 HEALTH CHECK
 ========================= */
 
 app.get("/api/health", (req, res) => {
   res.json({
     status: "OK",
     service: "GraphGuard Backend",
+    version: "1.0.0",
     time: new Date()
   });
 });

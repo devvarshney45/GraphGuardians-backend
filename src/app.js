@@ -3,7 +3,9 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 
-import { connectDB } from "./config/db.js";
+// ✅ FIXED (default import)
+import connectDB from "./config/db.js";
+
 import { startCron } from "./jobs/cron.job.js";
 
 // 🔥 Routes
@@ -18,7 +20,7 @@ import githubRoutes from "./routes/github.routes.js";
 import graphRoutes from "./routes/graph.routes.js";
 import fixRoutes from "./routes/fix.routes.js";
 import reportRoutes from "./routes/report.routes.js";
-import scanRoutes from "./routes/scan.routes.js"; // ✅ NEW
+import scanRoutes from "./routes/scan.routes.js";
 
 import { errorMiddleware } from "./middleware/error.middleware.js";
 
@@ -60,7 +62,7 @@ app.use("/api/github", githubRoutes);
 app.use("/api/graph", graphRoutes);
 app.use("/api/fix", fixRoutes);
 app.use("/api/report", reportRoutes);
-app.use("/api/scan-history", scanRoutes); // ✅ NEW
+app.use("/api/scan-history", scanRoutes);
 
 /* =========================
    🧪 HEALTH CHECK

@@ -3,7 +3,7 @@ import Repo from "../models/repo.model.js";
 import { analyzeRepo } from "../controllers/analysis.controller.js";
 
 export const startCron = () => {
-  // every 1 hour
+  // ⏰ every 1 hour
   cron.schedule("0 * * * *", async () => {
     console.log("🔄 Running scheduled scan...");
 
@@ -11,25 +11,36 @@ export const startCron = () => {
       const repos = await Repo.find();
 
       for (const repo of repos) {
-        console.log("Scanning:", repo.name);
+        console.log("🔍 Scanning:", repo.name);
 
-        await analyzeRepo(
-          {
-            body: {
-              url: repo.url,
-              repoId: repo._id
+        try {
+          await analyzeRepo(
+            {
+              body: {
+                url: repo.url,
+                repoId: repo._id,
+                token: null // optional (if stored later)
+              },
+              user: {
+                id: repo.userId.toString() // 🔥 VERY IMPORTANT
+              }
+            },
+            {
+              status: () => ({
+                json: () => {}
+              }),
+              json: () => {}
             }
-          },
-          {
-            json: () => {} // dummy response
-          }
-        );
+          );
+        } catch (err) {
+          console.log(`❌ Failed scan for ${repo.name}:`, err.message);
+        }
       }
 
       console.log("✅ Cron scan completed");
 
     } catch (err) {
-      console.log("Cron error:", err.message);
+      console.log("❌ Cron error:", err.message);
     }
   });
 };

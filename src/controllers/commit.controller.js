@@ -24,7 +24,7 @@ export const getCommits = async (req, res) => {
 // 🔁 WEBHOOK (REAL-TIME 🔥)
 export const githubWebhook = async (req, res) => {
   try {
-    const { repository, commits } = req.body;
+    const { repository } = req.body;
 
     if (!repository) return res.sendStatus(400);
 
@@ -34,28 +34,20 @@ export const githubWebhook = async (req, res) => {
 
     if (!repo) return res.sendStatus(200);
 
-    // 🔒 avoid duplicates
-    const existingHashes = await Commit.find({
-      repoId: repo._id
-    }).select("hash");
+    console.log("🔥 New commit detected");
 
-    const existingSet = new Set(existingHashes.map(c => c.hash));
-
-    const newCommits = commits
-      .filter(c => !existingSet.has(c.id))
-      .map(c => ({
-        repoId: repo._id,
-        message: c.message,
-        hash: c.id
-      }));
-
-    if (newCommits.length > 0) {
-      await Commit.insertMany(newCommits);
-      console.log("✅ New commits saved:", newCommits.length);
-
-      // 🔥 RE-ANALYSIS (CORRECT WAY)
-      await runAnalysis(repo.url, repo._id);
-    }
+    // 🔥 AUTO ANALYZE
+    await analyzeRepo(
+      {
+        body: {
+          url: repo.url,
+          repoId: repo._id,
+          token: repo.githubToken // optional
+        },
+        user: { id: repo.userId }
+      },
+      { json: () => {} }
+    );
 
     res.sendStatus(200);
 

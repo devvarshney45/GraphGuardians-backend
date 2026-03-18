@@ -1,33 +1,40 @@
-import Alert from "../models/alert.model.js";
+import express from "express";
+import {
+  getAlerts,
+  markAsRead,
+  markAllAsRead,
+  clearAlerts
+} from "../controllers/alert.controller.js";
 
-// ✅ mark as read
-export const markAsRead = async (req, res) => {
-  try {
-    const { id } = req.params;
+import { authMiddleware } from "../middleware/auth.middleware.js";
 
-    const alert = await Alert.findByIdAndUpdate(
-      id,
-      { isRead: true },
-      { new: true }
-    );
+const router = express.Router();
 
-    res.json(alert);
+/* =========================
+   📄 GET ALERTS
+========================= */
+// GET /api/alerts?repoId=...&page=1&limit=20
+router.get("/", authMiddleware, getAlerts);
 
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
+/* =========================
+   🔔 MARK SINGLE ALERT AS READ
+========================= */
+// PUT /api/alerts/:id/read
+router.put("/:id/read", authMiddleware, markAsRead);
 
-// 🗑️ clear alerts
-export const clearAlerts = async (req, res) => {
-  try {
-    const { repoId } = req.query;
+/* =========================
+   🔔 MARK ALL ALERTS AS READ
+========================= */
+// PUT /api/alerts/read-all?repoId=...
+router.put("/read-all", authMiddleware, markAllAsRead);
 
-    await Alert.deleteMany({ repoId });
+/* =========================
+   🗑️ CLEAR ALERTS
+========================= */
+// DELETE /api/alerts?repoId=...
+router.delete("/", authMiddleware, clearAlerts);
 
-    res.json({ msg: "Alerts cleared" });
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
+/* =========================
+   ✅ EXPORT
+========================= */
+export default router;

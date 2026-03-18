@@ -20,9 +20,11 @@ import {
 
 export const analyzeRepo = async (req, res) => {
   try {
-    const { url, repoId } = req.body;
+    const { url, repoId, token } = req.body;
 
-    // 🔐 Repo check
+    /* =========================
+       🔐 Repo check
+    ========================= */
     const repo = await Repo.findById(repoId);
     if (!repo) return res.status(404).json({ msg: "Repo not found" });
 
@@ -30,25 +32,49 @@ export const analyzeRepo = async (req, res) => {
       return res.status(403).json({ msg: "Unauthorized" });
     }
 
-    // 🔁 OLD DATA (for diff)
-    const oldDeps = await Dependency.find({ repoId }).lean();
+    /* =========================
+       🔥 VERSION INCREMENT
+    ========================= */
+    const newVersion = (repo.scanCount || 0) + 1;
+
+    /* =========================
+       🔁 OLD DATA (LAST VERSION)
+    ========================= */
+    const oldDeps = await Dependency.find({
+      repoId,
+      versionGroup: repo.scanCount
+    }).lean();
+
     const oldVulns = await Vulnerability.find({ repoId }).lean();
 
-    // 1️⃣ Fetch package.json
-    const pkg = await fetchPackageJson(url);
+    /* =========================
+       1️⃣ Fetch package.json
+    ========================= */
+    const pkg = await fetchPackageJson(url, token);
 
-    // 2️⃣ Extract dependencies
+    if (!pkg) {
+      return res.status(400).json({
+        msg: "package.json not accessible"
+      });
+    }
+
+    /* =========================
+       2️⃣ Extract dependencies
+    ========================= */
     const deps = extractDependencies(pkg);
 
-    // 3️⃣ Compare dependencies 🔥
+    /* =========================
+       3️⃣ Compare dependencies
+    ========================= */
     const depChanges = compareDependencies(oldDeps, deps);
 
-    // 4️⃣ Reset + save dependencies
-    await Dependency.deleteMany({ repoId });
-
+    /* =========================
+       4️⃣ SAVE (NO DELETE 🔥)
+    ========================= */
     await Dependency.insertMany(
       deps.map(d => ({
         repoId,
+        versionGroup: newVersion, // 🔥 IMPORTANT
         name: d.name,
         version: d.version,
         cleanVersion: d.cleanVersion,
@@ -56,10 +82,12 @@ export const analyzeRepo = async (req, res) => {
       }))
     );
 
-    // 5️⃣ Check vulnerabilities
+    /* =========================
+       5️⃣ Vulnerabilities
+    ========================= */
     const vulns = await checkVulnerabilities(deps);
 
-    // 6️⃣ Reset + save vulnerabilities
+    // ❌ optional: version bhi add kar sakte ho later
     await Vulnerability.deleteMany({ repoId });
 
     await Vulnerability.insertMany(
@@ -74,31 +102,46 @@ export const analyzeRepo = async (req, res) => {
       }))
     );
 
-    // 7️⃣ Diff vulnerabilities 🔥
+    /* =========================
+       6️⃣ Diff vulnerabilities
+    ========================= */
     const newVulns = findNewVulnerabilities(oldVulns, vulns);
     const fixedVulns = findFixedVulnerabilities(oldVulns, vulns);
 
-    // 8️⃣ Generate alerts 🔔
+    /* =========================
+       7️⃣ Alerts
+    ========================= */
     const alerts = generateAlerts(repoId, newVulns, fixedVulns);
 
     if (alerts.length > 0) {
       await Alert.insertMany(alerts);
     }
 
-    // 9️⃣ Build graph
+    /* =========================
+       8️⃣ Graph (LATEST ONLY)
+    ========================= */
     const graph = buildGraph(deps, vulns, repoId);
 
-    // 🔟 Calculate risk
+    /* =========================
+       9️⃣ Risk
+    ========================= */
     const risk = calculateRisk(vulns);
 
-    // 1️⃣1️⃣ AI insights
+    /* =========================
+       🔟 AI
+    ========================= */
     const aiInsights = await generateAIInsights(vulns);
 
-    // 1️⃣2️⃣ Push to TigerGraph
+    /* =========================
+       1️⃣1️⃣ TigerGraph
+    ========================= */
     await pushToTigerGraph(repoId, deps, vulns);
 
-    // 1️⃣3️⃣ Update repo
+    /* =========================
+       1️⃣2️⃣ UPDATE REPO
+    ========================= */
     await Repo.findByIdAndUpdate(repoId, {
+      scanCount: newVersion, // 🔥 IMPORTANT
       riskScore: risk,
       dependencyCount: deps.length,
       vulnerabilityCount: vulns.length,
@@ -106,18 +149,25 @@ export const analyzeRepo = async (req, res) => {
       status: "scanned"
     });
 
-    // 1️⃣4️⃣ Response
+    /* =========================
+       RESPONSE
+    ========================= */
     res.json({
+      version: newVersion, // 🔥 NEW
       dependencies: deps,
       vulnerabilities: vulns,
-      changes: depChanges, // 🔥 NEW
+      changes: depChanges,
       graph,
       riskScore: risk,
       aiInsights,
-      alerts // 🔥 NEW
+      alerts
     });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.log("❌ Analyze Error:", err.message);
+
+    res.status(500).json({
+      error: err.message
+    });
   }
 };

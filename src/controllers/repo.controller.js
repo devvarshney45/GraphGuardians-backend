@@ -1,12 +1,19 @@
 import Repo from "../models/repo.model.js";
 import axios from "axios";
+import { analyzeRepo } from "./analysis.controller.js";
 
 /* =========================
-   🔧 HELPER
+   🔧 HELPERS
 ========================= */
 
+const normalizeUrl = (url) => {
+  return url.replace(".git", "").trim();
+};
+
 const parseRepo = (url) => {
-  const parts = url.replace(".git", "").split("github.com/")[1]?.split("/");
+  const cleanUrl = normalizeUrl(url);
+
+  const parts = cleanUrl.split("github.com/")[1]?.split("/");
 
   if (!parts || parts.length < 2) {
     throw new Error("Invalid GitHub URL");
@@ -14,7 +21,8 @@ const parseRepo = (url) => {
 
   return {
     owner: parts[0],
-    repo: parts[1]
+    repo: parts[1],
+    cleanUrl
   };
 };
 
@@ -23,7 +31,7 @@ const getHeaders = (token) => {
 };
 
 /* =========================
-   ➕ ADD REPO
+   ➕ ADD REPO + AUTO SCAN 🔥
 ========================= */
 
 export const addRepo = async (req, res) => {
@@ -35,7 +43,7 @@ export const addRepo = async (req, res) => {
       return res.status(400).json({ msg: "Repo URL required" });
     }
 
-    const { owner, repo } = parseRepo(url);
+    const { owner, repo, cleanUrl } = parseRepo(url);
 
     let repoData;
 
@@ -47,36 +55,71 @@ export const addRepo = async (req, res) => {
 
       repoData = response.data;
 
-    } catch {
-      return res.status(404).json({ msg: "Repository not found or private" });
+    } catch (err) {
+      console.log("❌ GitHub API error:", err.response?.data || err.message);
+      return res.status(404).json({
+        msg: "Repository not found or private"
+      });
     }
 
-    // ❌ duplicate
-    const existing = await Repo.findOne({ url, userId });
+    // ❌ duplicate check
+    const existing = await Repo.findOne({ url: cleanUrl, userId });
     if (existing) {
       return res.status(400).json({ msg: "Repo already added" });
     }
 
-    // ✅ create
+    // ✅ create repo
     const newRepo = await Repo.create({
       userId,
       name: repoData.full_name,
-      url,
-      private: repoData.private,
+      url: cleanUrl,
+      isPrivate: repoData.private,
       stars: repoData.stargazers_count,
       forks: repoData.forks_count,
       language: repoData.language,
+
+      // 🔥 save token (for private repo future scans)
+      githubToken: token,
+
       riskScore: 0,
-      status: "idle"
+      status: "scanning" // 🔥 important
     });
 
+    // 🔥 AUTO FIRST SCAN (VERY IMPORTANT)
+    try {
+      await analyzeRepo(
+        {
+          body: {
+            url: cleanUrl,
+            repoId: newRepo._id,
+            token
+          },
+          user: { id: userId }
+        },
+        { json: () => {} }
+      );
+
+      console.log("✅ Auto first scan completed");
+
+    } catch (err) {
+      console.log("❌ Auto scan failed:", err.message);
+
+      // mark error
+      await Repo.findByIdAndUpdate(newRepo._id, {
+        status: "error"
+      });
+    }
+
     res.status(201).json({
-      msg: "Repo added successfully",
+      msg: "Repo added & scanned successfully",
       repo: newRepo
     });
 
   } catch (err) {
-    res.status(500).json({ error: "Failed to add repo" });
+    console.log("❌ Add repo error:", err.message);
+    res.status(500).json({
+      error: "Failed to add repo"
+    });
   }
 };
 
@@ -98,7 +141,10 @@ export const getRepos = async (req, res) => {
     });
 
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch repos" });
+    console.log("❌ Fetch repos error:", err.message);
+    res.status(500).json({
+      error: "Failed to fetch repos"
+    });
   }
 };
 
@@ -123,7 +169,10 @@ export const getRepoById = async (req, res) => {
     res.json(repo);
 
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch repo" });
+    console.log("❌ Fetch repo error:", err.message);
+    res.status(500).json({
+      error: "Failed to fetch repo"
+    });
   }
 };
 
@@ -147,9 +196,14 @@ export const deleteRepo = async (req, res) => {
 
     await Repo.findByIdAndDelete(repoId);
 
-    res.json({ msg: "Repo deleted successfully" });
+    res.json({
+      msg: "Repo deleted successfully"
+    });
 
   } catch (err) {
-    res.status(500).json({ error: "Failed to delete repo" });
+    console.log("❌ Delete repo error:", err.message);
+    res.status(500).json({
+      error: "Failed to delete repo"
+    });
   }
 };

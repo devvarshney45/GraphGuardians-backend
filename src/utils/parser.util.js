@@ -1,7 +1,7 @@
 export const extractDependencies = (pkg) => {
   const allDeps = {
-    ...pkg.dependencies,
-    ...pkg.devDependencies
+    ...(pkg.dependencies || {}),
+    ...(pkg.devDependencies || {})
   };
 
   const result = [];
@@ -12,9 +12,15 @@ export const extractDependencies = (pkg) => {
     result.push({
       name,
       version,
-      cleanVersion: version.replace(/[^0-9.]/g, ""), // 🔥 important
-      type: pkg.dependencies?.[name] ? "prod" : "dev",
-      parent: null // 🔥 future use (chain)
+
+      // 🔥 clean version (e.g. ^1.2.3 → 1.2.3)
+      cleanVersion: version?.replace(/[^0-9.]/g, "") || "",
+
+      // ✅ FIX: schema ke hisaab se
+      type: "DIRECT",
+
+      // 🔗 future graph use
+      parent: null
     });
   }
 

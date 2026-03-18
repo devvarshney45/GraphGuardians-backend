@@ -6,34 +6,81 @@ export const authMiddleware = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
-    // ❌ No token
+    /* =========================
+       ❌ NO TOKEN
+    ========================= */
     if (!authHeader) {
-      return res.status(401).json({ msg: "No token provided" });
+      return res.status(401).json({
+        msg: "Access denied. No token provided"
+      });
     }
 
-    // ✅ Bearer token extract
+    /* =========================
+       ❌ INVALID FORMAT
+       Expect: Bearer <token>
+    ========================= */
+    if (!authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({
+        msg: "Invalid token format"
+      });
+    }
+
+    /* =========================
+       🔑 EXTRACT TOKEN
+    ========================= */
     const token = authHeader.split(" ")[1];
 
     if (!token) {
-      return res.status(401).json({ msg: "Invalid token format" });
+      return res.status(401).json({
+        msg: "Token missing"
+      });
     }
 
-    // 🔓 Verify token
+    /* =========================
+       🔓 VERIFY TOKEN
+    ========================= */
     const decoded = jwt.verify(token, ENV.JWT_SECRET);
 
-    // 👤 Fetch user
+    /* =========================
+       👤 GET USER
+    ========================= */
     const user = await User.findById(decoded.id).select("-password");
 
     if (!user) {
-      return res.status(401).json({ msg: "User not found" });
+      return res.status(401).json({
+        msg: "User not found"
+      });
     }
 
-    // attach user
+    /* =========================
+       ✅ ATTACH USER
+    ========================= */
     req.user = user;
 
     next();
 
   } catch (err) {
-    return res.status(401).json({ msg: "Unauthorized", error: err.message });
+
+    /* =========================
+       ❌ TOKEN EXPIRED
+    ========================= */
+    if (err.name === "TokenExpiredError") {
+      return res.status(401).json({
+        msg: "Token expired, please login again"
+      });
+    }
+
+    /* =========================
+       ❌ INVALID TOKEN
+    ========================= */
+    if (err.name === "JsonWebTokenError") {
+      return res.status(401).json({
+        msg: "Invalid token"
+      });
+    }
+
+    return res.status(401).json({
+      msg: "Unauthorized access"
+    });
   }
 };

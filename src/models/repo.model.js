@@ -34,9 +34,7 @@ const repoSchema = new mongoose.Schema({
     default: 0
   },
 
-  health: {
-    type: Number // %
-  },
+  health: Number,
 
   vulnerabilityCount: {
     type: Number,
@@ -49,27 +47,25 @@ const repoSchema = new mongoose.Schema({
   },
 
   // ⏱️ tracking
-  lastScanned: {
-    type: Date
-  },
+  lastScanned: Date,
 
-  // 🔄 status
+  // 🔥 UPDATED STATUS (IMPORTANT)
   status: {
     type: String,
-    enum: ["pending", "scanned", "error"],
-    default: "pending"
+    enum: ["idle", "scanning", "scanned", "error"],
+    default: "idle"
   },
 
-  // 🔗 webhook enabled
   webhookEnabled: {
     type: Boolean,
     default: false
   },
 
-  createdAt: {
-    type: Date,
-    default: Date.now
-  }
+  scanCount:{
+    type:Number,
+    default:0
+  },
+  githubToken:String
 
 }, { timestamps: true });
 

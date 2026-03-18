@@ -1,49 +1,76 @@
 import axios from "axios";
 
-// 🔥 AI-based explanation + fix generator
 export const generateAIInsights = async (vulnerabilities) => {
   try {
-    const results = [];
+    if (!vulnerabilities.length) return [];
 
-    for (const v of vulnerabilities) {
-
-      // 🧠 prompt
-      const prompt = `
+    // 🔥 Combine all vulnerabilities in one prompt
+    const prompt = `
 You are a cybersecurity expert.
 
-Explain this vulnerability in simple developer-friendly language:
+Analyze the following vulnerabilities and return structured JSON.
+
+For each vulnerability, provide:
+- package
+- explanation (simple)
+- risk (why dangerous)
+- fix (npm/yarn command)
+- bestPractice
+
+Vulnerabilities:
+${vulnerabilities.map(v => `
 Package: ${v.package}
 Severity: ${v.severity}
 Description: ${v.description}
+`).join("\n")}
 
-Also provide:
-1. Why it is dangerous
-2. How to fix it (npm/yarn command)
-3. Best practice to avoid it
+Return ONLY JSON array.
 `;
 
-      // 🔥 Replace with OpenAI / any AI API
-      const response = await axios.post("https://api.openai.com/v1/chat/completions", {
+    const response = await axios.post(
+      "https://api.openai.com/v1/chat/completions",
+      {
         model: "gpt-4o-mini",
-        messages: [{ role: "user", content: prompt }]
-      }, {
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.3
+      },
+      {
         headers: {
           Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
         }
-      });
+      }
+    );
 
-      const aiText = response.data.choices[0].message.content;
+    let aiText = response.data.choices[0].message.content;
 
-      results.push({
+    // 🔥 try parsing JSON safely
+    let parsed;
+
+    try {
+      parsed = JSON.parse(aiText);
+    } catch {
+      // fallback if model returns text
+      parsed = vulnerabilities.map(v => ({
         package: v.package,
-        insight: aiText
-      });
+        explanation: v.description,
+        risk: "Potential security risk",
+        fix: "Update to latest version",
+        bestPractice: "Regularly update dependencies"
+      }));
     }
 
-    return results;
+    return parsed;
 
   } catch (err) {
     console.log("AI error:", err.message);
-    return [];
+
+    // 🔥 fallback (VERY IMPORTANT)
+    return vulnerabilities.map(v => ({
+      package: v.package,
+      explanation: v.description,
+      risk: "Potential security issue",
+      fix: "Update package to latest version",
+      bestPractice: "Keep dependencies updated"
+    }));
   }
 };

@@ -7,16 +7,27 @@ export const getDashboard = async (req, res) => {
   try {
     const { repoId } = req.params;
 
-    // repo
+    // 🔍 Repo check
     const repo = await Repo.findById(repoId);
+    if (!repo) {
+      return res.status(404).json({ msg: "Repo not found" });
+    }
 
-    // counts
-    const dependencyCount = await Dependency.countDocuments({ repoId });
-    const vulnerabilities = await Vulnerability.find({ repoId });
+    // 🔐 Ownership check
+    if (repo.userId.toString() !== req.user.id) {
+      return res.status(403).json({ msg: "Unauthorized" });
+    }
+
+    // ⚡ Parallel queries (FAST)
+    const [dependencyCount, vulnerabilities, alerts] = await Promise.all([
+      Dependency.countDocuments({ repoId }),
+      Vulnerability.find({ repoId }),
+      Alert.find({ repoId }).sort({ createdAt: -1 }).limit(5)
+    ]);
 
     const vulnCount = vulnerabilities.length;
 
-    // severity count
+    // 📊 severity count
     let critical = 0, high = 0, medium = 0, low = 0;
 
     vulnerabilities.forEach(v => {
@@ -26,29 +37,26 @@ export const getDashboard = async (req, res) => {
       else low++;
     });
 
-    // risk score logic
-    let riskScore = 1;
-    vulnerabilities.forEach(v => {
-      if (v.severity === "CRITICAL") riskScore += 3;
-      else if (v.severity === "HIGH") riskScore += 2;
-      else riskScore += 1;
-    });
+    // 🧠 risk score (better logic)
+    let riskScore = (
+      critical * 3 +
+      high * 2 +
+      medium * 1 +
+      low * 0.5
+    );
 
-    riskScore = Math.min(10, riskScore);
+    riskScore = Math.min(10, Math.max(1, riskScore));
 
-    // health %
+    // ❤️ health %
     const health = Math.max(0, 100 - riskScore * 10);
-
-    // recent alerts
-    const alerts = await Alert.find({ repoId })
-      .sort({ createdAt: -1 })
-      .limit(5);
 
     res.json({
       repo: {
         id: repo._id,
         name: repo.name,
-        url: repo.url
+        url: repo.url,
+        status: repo.status,
+        lastScanned: repo.lastScanned
       },
       stats: {
         riskScore,

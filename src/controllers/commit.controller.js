@@ -1,8 +1,8 @@
 import Commit from "../models/commit.model.js";
 import Repo from "../models/repo.model.js";
-import { analyzeRepo } from "./analysis.controller.js";
+import { runAnalysis } from "../services/analysis.service.js";
 
-// 📥 GET COMMITS (repo wise)
+// 📥 GET COMMITS
 export const getCommits = async (req, res) => {
   try {
     const { repoId } = req.params;
@@ -21,7 +21,7 @@ export const getCommits = async (req, res) => {
   }
 };
 
-// 🔁 GITHUB WEBHOOK (REAL-TIME 🔥)
+// 🔁 WEBHOOK (REAL-TIME 🔥)
 export const githubWebhook = async (req, res) => {
   try {
     const { repository, commits } = req.body;
@@ -30,33 +30,37 @@ export const githubWebhook = async (req, res) => {
 
     const repoName = repository.full_name;
 
-    // repo find karo DB me
     const repo = await Repo.findOne({ name: repoName });
 
-    if (!repo) return res.sendStatus(200); // ignore if not tracked
+    if (!repo) return res.sendStatus(200);
 
-    // commits save karo
-    const commitData = commits.map(c => ({
-      repoId: repo._id,
-      message: c.message,
-      hash: c.id
-    }));
+    // 🔒 avoid duplicates
+    const existingHashes = await Commit.find({
+      repoId: repo._id
+    }).select("hash");
 
-    await Commit.insertMany(commitData);
+    const existingSet = new Set(existingHashes.map(c => c.hash));
 
-    console.log("New commits saved:", commitData.length);
+    const newCommits = commits
+      .filter(c => !existingSet.has(c.id))
+      .map(c => ({
+        repoId: repo._id,
+        message: c.message,
+        hash: c.id
+      }));
 
-    // 🔥 AUTO RE-ANALYZE (IMPORTANT)
-    await analyzeRepo({
-      body: { url: repo.url, repoId: repo._id }
-    }, {
-      json: () => {} // dummy response
-    });
+    if (newCommits.length > 0) {
+      await Commit.insertMany(newCommits);
+      console.log("✅ New commits saved:", newCommits.length);
+
+      // 🔥 RE-ANALYSIS (CORRECT WAY)
+      await runAnalysis(repo.url, repo._id);
+    }
 
     res.sendStatus(200);
 
   } catch (err) {
-    console.log(err.message);
+    console.log("Webhook error:", err.message);
     res.sendStatus(500);
   }
 };

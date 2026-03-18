@@ -1,10 +1,17 @@
 import express from "express";
-import { getCommits } from "../controllers/commit.controller.js";
-import { githubWebhook } from "../controllers/commit.controller.js";
+import {
+  getCommits,
+  githubWebhook
+} from "../controllers/commit.controller.js";
+
+import { authMiddleware } from "../middleware/auth.middleware.js";
+
 const router = express.Router();
-router.get("/:repoId", getCommits);
 
+// 📥 Get commits (protected)
+router.get("/:repoId", authMiddleware, getCommits);
 
+// 🔁 GitHub Webhook (public but secured via secret later)
 router.post("/webhook", githubWebhook);
 
 export default router;

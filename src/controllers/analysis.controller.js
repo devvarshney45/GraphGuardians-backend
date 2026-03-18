@@ -2,7 +2,7 @@ import Repo from "../models/repo.model.js";
 import Dependency from "../models/dependency.model.js";
 import Vulnerability from "../models/vulnerability.model.js";
 import Alert from "../models/alert.model.js";
-import ScanHistory from "../models/scanHistory.model.js"; // 🔥 NEW
+import ScanHistory from "../models/scanHistory.model.js";
 
 import { fetchPackageJson } from "../services/github.service.js";
 import { extractDependencies } from "../utils/parser.util.js";
@@ -40,17 +40,15 @@ export const analyzeRepo = async (req, res) => {
     const newVersion = currentVersion + 1;
 
     /* =========================
-       🔁 OLD DATA (PREVIOUS VERSION)
+       🔁 OLD DATA
     ========================= */
-    const oldDeps = await Dependency.find({
-      repoId,
-      versionGroup: currentVersion
-    }).lean();
+    const oldDeps = currentVersion
+      ? await Dependency.find({ repoId, versionGroup: currentVersion }).lean()
+      : [];
 
-    const oldVulns = await Vulnerability.find({
-      repoId,
-      versionGroup: currentVersion
-    }).lean();
+    const oldVulns = currentVersion
+      ? await Vulnerability.find({ repoId, versionGroup: currentVersion }).lean()
+      : [];
 
     /* =========================
        1️⃣ Fetch package.json
@@ -68,55 +66,67 @@ export const analyzeRepo = async (req, res) => {
     ========================= */
     let deps = extractDependencies(pkg);
 
-    // 🔥 REMOVE DUPLICATES (VERY IMPORTANT)
-    deps = Array.from(
-      new Map(deps.map(d => [d.name, d])).values()
-    );
+    /* =========================
+       🔥 STRONG DEDUP + NORMALIZATION
+    ========================= */
+    const seen = new Set();
+    const uniqueDeps = [];
+
+    for (const d of deps) {
+      const cleanName = d.name.toLowerCase().trim();
+      const key = `${cleanName}_${newVersion}`;
+
+      if (!seen.has(key)) {
+        seen.add(key);
+
+        uniqueDeps.push({
+          repoId,
+          versionGroup: newVersion,
+          name: cleanName,
+          version: d.version,
+          cleanVersion: d.cleanVersion,
+          type: d.type
+        });
+      }
+    }
 
     /* =========================
        3️⃣ Compare dependencies
     ========================= */
-    const depChanges = compareDependencies(oldDeps, deps);
+    const depChanges = compareDependencies(oldDeps, uniqueDeps);
 
     /* =========================
-       4️⃣ SAVE DEPENDENCIES (VERSIONED)
+       4️⃣ SAVE DEPENDENCIES
     ========================= */
-    await Dependency.insertMany(
-      deps.map(d => ({
-        repoId,
-        versionGroup: newVersion,
-        name: d.name,
-        version: d.version,
-        cleanVersion: d.cleanVersion,
-        type: d.type
-      })),
-      { ordered: false } // 🔥 prevents duplicate crash
-    );
+    await Dependency.insertMany(uniqueDeps, {
+      ordered: false
+    });
 
     /* =========================
-       5️⃣ Vulnerabilities (VERSIONED)
+       5️⃣ Vulnerabilities
     ========================= */
-    const vulns = await checkVulnerabilities(deps);
+    const vulns = await checkVulnerabilities(uniqueDeps);
 
-    await Vulnerability.insertMany(
-      vulns.map(v => ({
-        repoId,
-        versionGroup: newVersion, // 🔥 IMPORTANT
-        package: v.package,
-        version: v.version,
-        severity: v.severity,
-        description: v.description,
-        cve: v.cve,
-        fix: v.fix
-      })),
-      { ordered: false }
-    );
+    const formattedVulns = vulns.map(v => ({
+      repoId,
+      versionGroup: newVersion,
+      package: v.package?.toLowerCase().trim(),
+      version: v.version,
+      severity: v.severity,
+      description: v.description,
+      cve: v.cve,
+      fix: v.fix
+    }));
+
+    await Vulnerability.insertMany(formattedVulns, {
+      ordered: false
+    });
 
     /* =========================
        6️⃣ Diff vulnerabilities
     ========================= */
-    const newVulns = findNewVulnerabilities(oldVulns, vulns);
-    const fixedVulns = findFixedVulnerabilities(oldVulns, vulns);
+    const newVulns = findNewVulnerabilities(oldVulns, formattedVulns);
+    const fixedVulns = findFixedVulnerabilities(oldVulns, formattedVulns);
 
     /* =========================
        7️⃣ Alerts
@@ -130,42 +140,42 @@ export const analyzeRepo = async (req, res) => {
     /* =========================
        8️⃣ Graph
     ========================= */
-    const graph = buildGraph(deps, vulns, repoId);
+    const graph = buildGraph(uniqueDeps, formattedVulns, repoId);
 
     /* =========================
        9️⃣ Risk
     ========================= */
-    const risk = calculateRisk(vulns);
+    const risk = calculateRisk(formattedVulns);
 
     /* =========================
        🔟 AI Insights
     ========================= */
-    const aiInsights = await generateAIInsights(vulns);
+    const aiInsights = await generateAIInsights(formattedVulns);
 
     /* =========================
        1️⃣1️⃣ TigerGraph Sync
     ========================= */
-    await pushToTigerGraph(repoId, deps, vulns);
+    await pushToTigerGraph(repoId, uniqueDeps, formattedVulns);
 
     /* =========================
-       1️⃣2️⃣ SAVE SCAN HISTORY 🔥
+       1️⃣2️⃣ Scan History
     ========================= */
     await ScanHistory.create({
       repoId,
       version: newVersion,
       riskScore: risk,
-      dependencyCount: deps.length,
-      vulnerabilityCount: vulns.length
+      dependencyCount: uniqueDeps.length,
+      vulnerabilityCount: formattedVulns.length
     });
 
     /* =========================
-       1️⃣3️⃣ UPDATE REPO
+       1️⃣3️⃣ Update Repo
     ========================= */
     await Repo.findByIdAndUpdate(repoId, {
       scanCount: newVersion,
       riskScore: risk,
-      dependencyCount: deps.length,
-      vulnerabilityCount: vulns.length,
+      dependencyCount: uniqueDeps.length,
+      vulnerabilityCount: formattedVulns.length,
       lastScanned: new Date(),
       status: "scanned"
     });
@@ -175,8 +185,8 @@ export const analyzeRepo = async (req, res) => {
     ========================= */
     res.json({
       version: newVersion,
-      dependencies: deps,
-      vulnerabilities: vulns,
+      dependencies: uniqueDeps,
+      vulnerabilities: formattedVulns,
       changes: depChanges,
       graph,
       riskScore: risk,

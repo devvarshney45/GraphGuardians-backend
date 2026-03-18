@@ -8,7 +8,7 @@ export const getDashboard = async (req, res) => {
     const { repoId } = req.params;
 
     // 🔍 Repo check
-    const repo = await Repo.findById(repoId);
+    const repo = await Repo.findById(repoId).lean();
     if (!repo) {
       return res.status(404).json({ msg: "Repo not found" });
     }
@@ -18,11 +18,11 @@ export const getDashboard = async (req, res) => {
       return res.status(403).json({ msg: "Unauthorized" });
     }
 
-    // ⚡ Parallel queries (FAST)
+    // ⚡ Parallel queries
     const [dependencyCount, vulnerabilities, alerts] = await Promise.all([
       Dependency.countDocuments({ repoId }),
-      Vulnerability.find({ repoId }),
-      Alert.find({ repoId }).sort({ createdAt: -1 }).limit(5)
+      Vulnerability.find({ repoId }).lean(),
+      Alert.find({ repoId }).sort({ createdAt: -1 }).limit(5).lean()
     ]);
 
     const vulnCount = vulnerabilities.length;
@@ -37,7 +37,7 @@ export const getDashboard = async (req, res) => {
       else low++;
     });
 
-    // 🧠 risk score (better logic)
+    // 🧠 risk score
     let riskScore = (
       critical * 3 +
       high * 2 +
@@ -47,8 +47,21 @@ export const getDashboard = async (req, res) => {
 
     riskScore = Math.min(10, Math.max(1, riskScore));
 
-    // ❤️ health %
+    // ❤️ health
     const health = Math.max(0, 100 - riskScore * 10);
+
+    // 🔥 NEW: Top vulnerabilities (for UI)
+    const topVulnerabilities = vulnerabilities
+      .sort((a, b) => {
+        const order = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+        return order[b.severity] - order[a.severity];
+      })
+      .slice(0, 5);
+
+    // 🔥 NEW: trend (dummy for now, can improve)
+    const riskTrend = repo.riskScore
+      ? riskScore - repo.riskScore
+      : 0;
 
     res.json({
       repo: {
@@ -58,18 +71,24 @@ export const getDashboard = async (req, res) => {
         status: repo.status,
         lastScanned: repo.lastScanned
       },
+
       stats: {
         riskScore,
         health,
         dependencies: dependencyCount,
-        vulnerabilities: vulnCount
+        vulnerabilities: vulnCount,
+        trend: riskTrend // 🔥 new
       },
+
       severity: {
         critical,
         high,
         medium,
         low
       },
+
+      topVulnerabilities, // 🔥 new
+
       alerts
     });
 

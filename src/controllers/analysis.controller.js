@@ -33,14 +33,19 @@ export const analyzeRepo = async (req, res) => {
       return res.status(403).json({ msg: "Unauthorized" });
     }
 
-    /* =========================
-       🔥 VERSION SYSTEM
-    ========================= */
     const currentVersion = repo.scanCount || 0;
     const newVersion = currentVersion + 1;
 
     /* =========================
-       🔁 OLD DATA
+       🔥 START LOG
+    ========================= */
+    console.log("\n🚀 ===============================");
+    console.log(`📦 Repo: ${repo.name}`);
+    console.log(`🔢 Version: ${currentVersion} → ${newVersion}`);
+    console.log("==================================");
+
+    /* =========================
+       OLD DATA
     ========================= */
     const oldDeps = currentVersion
       ? await Dependency.find({ repoId, versionGroup: currentVersion }).lean()
@@ -51,7 +56,7 @@ export const analyzeRepo = async (req, res) => {
       : [];
 
     /* =========================
-       1️⃣ Fetch package.json
+       FETCH PACKAGE.JSON
     ========================= */
     const pkg = await fetchPackageJson(url, token);
 
@@ -61,14 +66,13 @@ export const analyzeRepo = async (req, res) => {
       });
     }
 
+    console.log("📥 package.json fetched");
+
     /* =========================
-       2️⃣ Extract dependencies
+       EXTRACT DEPENDENCIES
     ========================= */
     let deps = extractDependencies(pkg);
 
-    /* =========================
-       🔥 STRONG DEDUP + NORMALIZATION
-    ========================= */
     const seen = new Set();
     const uniqueDeps = [];
 
@@ -90,20 +94,29 @@ export const analyzeRepo = async (req, res) => {
       }
     }
 
+    console.log(`📦 Dependencies: ${uniqueDeps.length}`);
+
     /* =========================
-       3️⃣ Compare dependencies
+       COMPARE
     ========================= */
     const depChanges = compareDependencies(oldDeps, uniqueDeps);
 
-    /* =========================
-       4️⃣ SAVE DEPENDENCIES
-    ========================= */
-    await Dependency.insertMany(uniqueDeps, {
-      ordered: false
+    console.log("🔄 Changes:");
+    console.log(`➕ Added: ${depChanges.added.length}`);
+    console.log(`❌ Removed: ${depChanges.removed.length}`);
+    console.log(`♻️ Updated: ${depChanges.updated.length}`);
+
+    depChanges.updated.forEach(d => {
+      console.log(`   🔁 ${d.name}: ${d.oldVersion} → ${d.newVersion}`);
     });
 
     /* =========================
-       5️⃣ Vulnerabilities
+       SAVE DEPENDENCIES
+    ========================= */
+    await Dependency.insertMany(uniqueDeps, { ordered: false });
+
+    /* =========================
+       VULNERABILITIES
     ========================= */
     const vulns = await checkVulnerabilities(uniqueDeps);
 
@@ -118,47 +131,44 @@ export const analyzeRepo = async (req, res) => {
       fix: v.fix
     }));
 
-    await Vulnerability.insertMany(formattedVulns, {
-      ordered: false
-    });
+    await Vulnerability.insertMany(formattedVulns, { ordered: false });
+
+    console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
 
     /* =========================
-       6️⃣ Diff vulnerabilities
+       DIFF VULNS
     ========================= */
     const newVulns = findNewVulnerabilities(oldVulns, formattedVulns);
     const fixedVulns = findFixedVulnerabilities(oldVulns, formattedVulns);
 
     /* =========================
-       7️⃣ Alerts
+       ALERTS
     ========================= */
     const alerts = generateAlerts(repoId, newVulns, fixedVulns);
 
     if (alerts.length > 0) {
       await Alert.insertMany(alerts);
+      console.log(`🔔 Alerts: ${alerts.length}`);
+    } else {
+      console.log("✅ No new alerts");
     }
 
     /* =========================
-       8️⃣ Graph
+       GRAPH + RISK + AI
     ========================= */
     const graph = buildGraph(uniqueDeps, formattedVulns, repoId);
-
-    /* =========================
-       9️⃣ Risk
-    ========================= */
     const risk = calculateRisk(formattedVulns);
-
-    /* =========================
-       🔟 AI Insights
-    ========================= */
     const aiInsights = await generateAIInsights(formattedVulns);
 
+    console.log(`⚠️ Risk Score: ${risk}`);
+
     /* =========================
-       1️⃣1️⃣ TigerGraph Sync
+       TIGERGRAPH
     ========================= */
     await pushToTigerGraph(repoId, uniqueDeps, formattedVulns);
 
     /* =========================
-       1️⃣2️⃣ Scan History
+       SCAN HISTORY
     ========================= */
     await ScanHistory.create({
       repoId,
@@ -169,27 +179,49 @@ export const analyzeRepo = async (req, res) => {
     });
 
     /* =========================
-       1️⃣3️⃣ Update Repo
+       UPDATE REPO
     ========================= */
-    await Repo.findByIdAndUpdate(repoId, {
-      scanCount: newVersion,
-      riskScore: risk,
-      dependencyCount: uniqueDeps.length,
-      vulnerabilityCount: formattedVulns.length,
-      lastScanned: new Date(),
-      status: "scanned"
-    });
+    const updatedRepo = await Repo.findByIdAndUpdate(
+      repoId,
+      {
+        scanCount: newVersion,
+        riskScore: risk,
+        dependencyCount: uniqueDeps.length,
+        vulnerabilityCount: formattedVulns.length,
+        lastScanned: new Date(),
+        status: "scanned"
+      },
+      { new: true }
+    ).lean();
+
+    /* =========================
+       FINAL LOG
+    ========================= */
+    console.log("📊 Scan Completed ✅");
+    console.log("==================================\n");
 
     /* =========================
        RESPONSE
     ========================= */
     res.json({
       version: newVersion,
+      scanCount: updatedRepo.scanCount,
+      repo: {
+        id: updatedRepo._id,
+        name: updatedRepo.name,
+        url: updatedRepo.url,
+        lastScanned: updatedRepo.lastScanned,
+        status: updatedRepo.status
+      },
+      stats: {
+        riskScore: risk,
+        dependencies: uniqueDeps.length,
+        vulnerabilities: formattedVulns.length
+      },
+      changes: depChanges,
       dependencies: uniqueDeps,
       vulnerabilities: formattedVulns,
-      changes: depChanges,
       graph,
-      riskScore: risk,
       aiInsights,
       alerts
     });

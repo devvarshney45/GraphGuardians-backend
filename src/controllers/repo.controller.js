@@ -26,12 +26,52 @@ const parseRepo = (url) => {
   };
 };
 
+// 🔥 TOKEN FIX (ENV + USER)
 const getHeaders = (token) => {
-  return token ? { Authorization: `token ${token}` } : {};
+  return {
+    Authorization: `token ${token || process.env.GITHUB_TOKEN}`
+  };
 };
 
 /* =========================
-   ➕ ADD REPO + AUTO SCAN 🔥
+   🔥 CREATE WEBHOOK (NEW)
+========================= */
+
+const createWebhook = async (owner, repo, token) => {
+  try {
+    const webhookUrl = `${process.env.BASE_URL}/api/commits/webhook`;
+
+    await axios.post(
+      `https://api.github.com/repos/${owner}/${repo}/hooks`,
+      {
+        name: "web",
+        active: true,
+        events: ["push"],
+        config: {
+          url: webhookUrl,
+          content_type: "json"
+        }
+      },
+      {
+        headers: getHeaders(token)
+      }
+    );
+
+    console.log("✅ Webhook created");
+
+  } catch (err) {
+    // ⚠️ webhook already exists ignore
+    if (err.response?.status === 422) {
+      console.log("⚠️ Webhook already exists");
+      return;
+    }
+
+    console.log("❌ Webhook error:", err.response?.data || err.message);
+  }
+};
+
+/* =========================
+   ➕ ADD REPO + AUTO SCAN + WEBHOOK 🔥
 ========================= */
 
 export const addRepo = async (req, res) => {
@@ -78,14 +118,20 @@ export const addRepo = async (req, res) => {
       forks: repoData.forks_count,
       language: repoData.language,
 
-      // 🔥 save token (for private repo future scans)
-      githubToken: token,
+      githubToken: token, // 🔥 save token
 
       riskScore: 0,
-      status: "scanning" // 🔥 important
+      status: "scanning"
     });
 
-    // 🔥 AUTO FIRST SCAN (VERY IMPORTANT)
+    /* =========================
+       🔥 AUTO WEBHOOK
+    ========================= */
+    await createWebhook(owner, repo, token);
+
+    /* =========================
+       🔥 AUTO FIRST SCAN
+    ========================= */
     try {
       await analyzeRepo(
         {
@@ -104,19 +150,19 @@ export const addRepo = async (req, res) => {
     } catch (err) {
       console.log("❌ Auto scan failed:", err.message);
 
-      // mark error
       await Repo.findByIdAndUpdate(newRepo._id, {
         status: "error"
       });
     }
 
     res.status(201).json({
-      msg: "Repo added & scanned successfully",
+      msg: "Repo added, webhook created & scanned successfully 🚀",
       repo: newRepo
     });
 
   } catch (err) {
     console.log("❌ Add repo error:", err.message);
+
     res.status(500).json({
       error: "Failed to add repo"
     });
@@ -142,6 +188,7 @@ export const getRepos = async (req, res) => {
 
   } catch (err) {
     console.log("❌ Fetch repos error:", err.message);
+
     res.status(500).json({
       error: "Failed to fetch repos"
     });
@@ -170,6 +217,7 @@ export const getRepoById = async (req, res) => {
 
   } catch (err) {
     console.log("❌ Fetch repo error:", err.message);
+
     res.status(500).json({
       error: "Failed to fetch repo"
     });
@@ -202,6 +250,7 @@ export const deleteRepo = async (req, res) => {
 
   } catch (err) {
     console.log("❌ Delete repo error:", err.message);
+
     res.status(500).json({
       error: "Failed to delete repo"
     });

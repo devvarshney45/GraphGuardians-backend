@@ -6,10 +6,17 @@ import Alert from "../models/alert.model.js";
 import { fetchPackageJson } from "../services/github.service.js";
 import { extractDependencies } from "../utils/parser.util.js";
 import { checkVulnerabilities } from "../services/vulnerability.service.js";
-import { buildGraph } from "../services/graph.service.js";
+import { buildGraph } from "../utils/graph.util.js";
 import { calculateRisk } from "../utils/risk.util.js";
 import { pushToTigerGraph } from "../services/tigergraph.service.js";
 import { generateAIInsights } from "../services/ai.service.js";
+
+import {
+  compareDependencies,
+  findNewVulnerabilities,
+  findFixedVulnerabilities,
+  generateAlerts
+} from "../utils/diff.util.js";
 
 export const analyzeRepo = async (req, res) => {
   try {
@@ -23,27 +30,36 @@ export const analyzeRepo = async (req, res) => {
       return res.status(403).json({ msg: "Unauthorized" });
     }
 
-    // 1. Fetch package.json
+    // 🔁 OLD DATA (for diff)
+    const oldDeps = await Dependency.find({ repoId }).lean();
+    const oldVulns = await Vulnerability.find({ repoId }).lean();
+
+    // 1️⃣ Fetch package.json
     const pkg = await fetchPackageJson(url);
 
-    // 2. Extract dependencies
+    // 2️⃣ Extract dependencies
     const deps = extractDependencies(pkg);
 
-    // 3. Reset old dependencies
+    // 3️⃣ Compare dependencies 🔥
+    const depChanges = compareDependencies(oldDeps, deps);
+
+    // 4️⃣ Reset + save dependencies
     await Dependency.deleteMany({ repoId });
 
     await Dependency.insertMany(
       deps.map(d => ({
         repoId,
         name: d.name,
-        version: d.version
+        version: d.version,
+        cleanVersion: d.cleanVersion,
+        type: d.type
       }))
     );
 
-    // 4. Check vulnerabilities
+    // 5️⃣ Check vulnerabilities
     const vulns = await checkVulnerabilities(deps);
 
-    // 5. Reset old vulnerabilities
+    // 6️⃣ Reset + save vulnerabilities
     await Vulnerability.deleteMany({ repoId });
 
     await Vulnerability.insertMany(
@@ -58,28 +74,30 @@ export const analyzeRepo = async (req, res) => {
       }))
     );
 
-    // 6. Build graph
-    const graph = buildGraph(deps, vulns, repo);
+    // 7️⃣ Diff vulnerabilities 🔥
+    const newVulns = findNewVulnerabilities(oldVulns, vulns);
+    const fixedVulns = findFixedVulnerabilities(oldVulns, vulns);
 
-    // 7. Calculate risk
-    const risk = calculateRisk(vulns);
+    // 8️⃣ Generate alerts 🔔
+    const alerts = generateAlerts(repoId, newVulns, fixedVulns);
 
-    // 8. AI insights 🔥
-    const aiInsights = await generateAIInsights(vulns);
-
-    // 9. Push to TigerGraph
-    await pushToTigerGraph(repoId, deps, vulns);
-
-    // 10. Create alert if needed
-    if (vulns.length > 0) {
-      await Alert.create({
-        repoId,
-        message: `⚠️ ${vulns.length} vulnerabilities detected`,
-        severity: "HIGH"
-      });
+    if (alerts.length > 0) {
+      await Alert.insertMany(alerts);
     }
 
-    // 11. Update repo
+    // 9️⃣ Build graph
+    const graph = buildGraph(deps, vulns, repoId);
+
+    // 🔟 Calculate risk
+    const risk = calculateRisk(vulns);
+
+    // 1️⃣1️⃣ AI insights
+    const aiInsights = await generateAIInsights(vulns);
+
+    // 1️⃣2️⃣ Push to TigerGraph
+    await pushToTigerGraph(repoId, deps, vulns);
+
+    // 1️⃣3️⃣ Update repo
     await Repo.findByIdAndUpdate(repoId, {
       riskScore: risk,
       dependencyCount: deps.length,
@@ -88,13 +106,15 @@ export const analyzeRepo = async (req, res) => {
       status: "scanned"
     });
 
-    // 12. Response
+    // 1️⃣4️⃣ Response
     res.json({
       dependencies: deps,
       vulnerabilities: vulns,
+      changes: depChanges, // 🔥 NEW
       graph,
       riskScore: risk,
-      aiInsights
+      aiInsights,
+      alerts // 🔥 NEW
     });
 
   } catch (err) {

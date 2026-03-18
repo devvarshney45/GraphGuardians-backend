@@ -1,10 +1,16 @@
 import axios from "axios";
 
-// 🔍 Extract owner/repo safely
+/* =========================
+   🔍 PARSE REPO
+========================= */
 const parseRepo = (repoUrl) => {
   try {
     const cleanUrl = repoUrl.replace(".git", "").trim();
-    const parts = cleanUrl.split("github.com/")[1].split("/");
+    const parts = cleanUrl.split("github.com/")[1]?.split("/");
+
+    if (!parts || parts.length < 2) {
+      throw new Error("Invalid GitHub URL");
+    }
 
     return {
       owner: parts[0],
@@ -15,7 +21,19 @@ const parseRepo = (repoUrl) => {
   }
 };
 
-// 📦 Fetch package.json (PRIVATE + PUBLIC SUPPORT)
+/* =========================
+   🔐 GET HEADERS (🔥 MAIN FIX)
+========================= */
+const getHeaders = (token) => {
+  return {
+    Accept: "application/vnd.github+json",
+    Authorization: `token ${token || process.env.GITHUB_TOKEN}` // 🔥 AUTO TOKEN
+  };
+};
+
+/* =========================
+   📦 FETCH PACKAGE.JSON
+========================= */
 export const fetchPackageJson = async (
   repoUrl,
   token = null,
@@ -26,30 +44,30 @@ export const fetchPackageJson = async (
 
     const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/package.json?ref=${branch}`;
 
-    const headers = {
-      Accept: "application/vnd.github+json"
-    };
+    const res = await axios.get(apiUrl, {
+      headers: getHeaders(token)
+    });
 
-    // 🔥 PRIVATE REPO SUPPORT
-    if (token) {
-      headers.Authorization = `token ${token}`;
-    }
-
-    const res = await axios.get(apiUrl, { headers });
-
-    const content = Buffer.from(res.data.content, "base64").toString("utf-8");
+    const content = Buffer.from(
+      res.data.content,
+      "base64"
+    ).toString("utf-8");
 
     return JSON.parse(content);
 
   } catch (err) {
     console.log("❌ GitHub Fetch Error:", err.response?.data || err.message);
 
+    /* =========================
+       🎯 ERROR HANDLING
+    ========================= */
+
     if (err.response?.status === 404) {
-      throw new Error("package.json not found in repo OR wrong branch");
+      throw new Error("package.json not found OR wrong branch");
     }
 
     if (err.response?.status === 403) {
-      throw new Error("GitHub API rate limit or bad token");
+      throw new Error("GitHub rate limit exceeded (use token)");
     }
 
     if (err.response?.status === 401) {

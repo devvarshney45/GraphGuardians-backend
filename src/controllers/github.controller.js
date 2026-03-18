@@ -1,9 +1,35 @@
 import axios from "axios";
 
-/**
- * 🔍 Validate GitHub Repo + Fetch Basic Info
- * POST /api/github/validate
- */
+/* ================================
+   🔧 COMMON HELPERS (IMPORTANT)
+================================ */
+
+// 🔍 Parse repo URL safely
+const parseRepo = (url) => {
+  const cleanUrl = url.replace(".git", "").trim();
+  const parts = cleanUrl.split("github.com/")[1]?.split("/");
+
+  if (!parts || parts.length < 2) {
+    throw new Error("Invalid GitHub URL");
+  }
+
+  return {
+    owner: parts[0],
+    repo: parts[1]
+  };
+};
+
+// 🔐 Auth headers
+const getHeaders = (token) => {
+  return token
+    ? { Authorization: `token ${token}` }
+    : {};
+};
+
+/* ================================
+   🔍 VALIDATE REPO
+================================ */
+
 export const validateRepo = async (req, res) => {
   try {
     const { url, token } = req.body;
@@ -12,22 +38,12 @@ export const validateRepo = async (req, res) => {
       return res.status(400).json({ msg: "Repo URL required" });
     }
 
-    // extract owner/repo
-    const parts = url.split("github.com/")[1]?.split("/");
-    if (!parts || parts.length < 2) {
-      return res.status(400).json({ msg: "Invalid GitHub URL" });
-    }
+    const { owner, repo } = parseRepo(url);
 
-    const owner = parts[0];
-    const repo = parts[1];
-
-    const apiUrl = `https://api.github.com/repos/${owner}/${repo}`;
-
-    const headers = token
-      ? { Authorization: `token ${token}` }
-      : {};
-
-    const response = await axios.get(apiUrl, { headers });
+    const response = await axios.get(
+      `https://api.github.com/repos/${owner}/${repo}`,
+      { headers: getHeaders(token) }
+    );
 
     res.json({
       valid: true,
@@ -50,26 +66,24 @@ export const validateRepo = async (req, res) => {
   }
 };
 
+/* ================================
+   📂 GET FILES
+================================ */
 
-/**
- * 📂 Get Repository Contents (root files)
- * GET /api/github/files?url=
- */
 export const getRepoFiles = async (req, res) => {
   try {
-    const { url, token } = req.query;
+    const { url, token, branch = "main" } = req.query;
 
-    const parts = url.split("github.com/")[1].split("/");
-    const owner = parts[0];
-    const repo = parts[1];
+    if (!url) {
+      return res.status(400).json({ msg: "Repo URL required" });
+    }
 
-    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents`;
+    const { owner, repo } = parseRepo(url);
 
-    const headers = token
-      ? { Authorization: `token ${token}` }
-      : {};
-
-    const response = await axios.get(apiUrl, { headers });
+    const response = await axios.get(
+      `https://api.github.com/repos/${owner}/${repo}/contents?ref=${branch}`,
+      { headers: getHeaders(token) }
+    );
 
     res.json({
       files: response.data.map(file => ({
@@ -80,70 +94,75 @@ export const getRepoFiles = async (req, res) => {
     });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: "Failed to fetch repository files"
+    });
   }
 };
 
+/* ================================
+   🌿 GET BRANCHES
+================================ */
 
-/**
- * 🌿 Get Branches
- * GET /api/github/branches?url=
- */
 export const getBranches = async (req, res) => {
   try {
     const { url, token } = req.query;
 
-    const parts = url.split("github.com/")[1].split("/");
-    const owner = parts[0];
-    const repo = parts[1];
+    if (!url) {
+      return res.status(400).json({ msg: "Repo URL required" });
+    }
 
-    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/branches`;
+    const { owner, repo } = parseRepo(url);
 
-    const headers = token
-      ? { Authorization: `token ${token}` }
-      : {};
-
-    const response = await axios.get(apiUrl, { headers });
+    const response = await axios.get(
+      `https://api.github.com/repos/${owner}/${repo}/branches`,
+      { headers: getHeaders(token) }
+    );
 
     res.json({
-      branches: response.data.map(b => ({
-        name: b.name
+      branches: response.data.map(branch => ({
+        name: branch.name
       }))
     });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: "Failed to fetch branches"
+    });
   }
 };
 
+/* ================================
+   📄 GET package.json
+================================ */
 
-/**
- * 📄 Get package.json directly
- * GET /api/github/package?url=
- */
 export const getPackageJson = async (req, res) => {
   try {
-    const { url, token } = req.query;
+    const { url, token, branch = "main" } = req.query;
 
-    const parts = url.split("github.com/")[1].split("/");
-    const owner = parts[0];
-    const repo = parts[1];
+    if (!url) {
+      return res.status(400).json({ msg: "Repo URL required" });
+    }
 
-    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/package.json`;
+    const { owner, repo } = parseRepo(url);
 
-    const headers = token
-      ? { Authorization: `token ${token}` }
-      : {};
+    const response = await axios.get(
+      `https://api.github.com/repos/${owner}/${repo}/contents/package.json?ref=${branch}`,
+      { headers: getHeaders(token) }
+    );
 
-    const response = await axios.get(apiUrl, { headers });
-
-    const content = Buffer.from(response.data.content, "base64").toString("utf-8");
+    const content = Buffer.from(
+      response.data.content,
+      "base64"
+    ).toString("utf-8");
 
     res.json({
       packageJson: JSON.parse(content)
     });
 
   } catch (err) {
-    res.status(500).json({ error: "package.json not found" });
+    res.status(404).json({
+      error: "package.json not found"
+    });
   }
 };

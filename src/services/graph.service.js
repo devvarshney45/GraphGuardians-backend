@@ -17,3 +17,7 @@ export const buildGraph = (deps, vulns) => {
 
   return { nodes, edges };
 };
+
+export const getVulnerabilityChain = (graph) => {
+  return graph.edges.filter(e => e.type === "has_vulnerability");
+};

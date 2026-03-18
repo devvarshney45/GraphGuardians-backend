@@ -6,13 +6,26 @@ export const getGraph = async (req, res) => {
   try {
     const { repoId } = req.params;
 
-    const repo = await Repo.findById(repoId);
+    // 🔍 Repo check
+    const repo = await Repo.findById(repoId).lean();
+    if (!repo) {
+      return res.status(404).json({ msg: "Repo not found" });
+    }
 
-    const deps = await Dependency.find({ repoId });
-    const vulns = await Vulnerability.find({ repoId });
+    // 🔐 Ownership check
+    if (repo.userId.toString() !== req.user.id) {
+      return res.status(403).json({ msg: "Unauthorized" });
+    }
+
+    // ⚡ Parallel fetch
+    const [deps, vulns] = await Promise.all([
+      Dependency.find({ repoId }).lean(),
+      Vulnerability.find({ repoId }).lean()
+    ]);
 
     const nodes = [];
     const edges = [];
+    const nodeSet = new Set();
 
     // 🟢 Repo node
     nodes.push({
@@ -21,30 +34,48 @@ export const getGraph = async (req, res) => {
       type: "repo"
     });
 
-    // 🟡 Dependency nodes
+    // 🟡 Dependencies
     deps.forEach(dep => {
-      nodes.push({
-        id: dep.name,
-        label: dep.name,
-        type: "dependency"
-      });
+      if (!nodeSet.has(dep.name)) {
+        nodes.push({
+          id: dep.name,
+          label: `${dep.name}@${dep.version}`,
+          type: "dependency"
+        });
+        nodeSet.add(dep.name);
+      }
 
+      // repo → dependency
       edges.push({
         from: repo._id.toString(),
         to: dep.name,
         type: "uses"
       });
+
+      // 🔥 dependency chain (IMPORTANT)
+      if (dep.parent) {
+        edges.push({
+          from: dep.parent,
+          to: dep.name,
+          type: "depends_on"
+        });
+      }
     });
 
-    // 🔴 Vulnerability nodes
+    // 🔴 Vulnerabilities
     vulns.forEach(v => {
-      const vulnId = v.package + "_vuln";
+      const vulnId = `${v.package}_${v.cve || "vuln"}`;
 
       nodes.push({
         id: vulnId,
         label: v.package,
         type: "vulnerability",
-        severity: v.severity
+        severity: v.severity,
+        color:
+          v.severity === "CRITICAL" ? "#ff0000" :
+          v.severity === "HIGH" ? "#ff4d4d" :
+          v.severity === "MEDIUM" ? "#ffa500" :
+          "#ffff00"
       });
 
       edges.push({

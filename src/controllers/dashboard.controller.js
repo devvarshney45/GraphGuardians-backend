@@ -7,27 +7,53 @@ export const getDashboard = async (req, res) => {
   try {
     const { repoId } = req.params;
 
-    // 🔍 Repo check
+    /* =========================
+       🔍 Repo check
+    ========================= */
     const repo = await Repo.findById(repoId).lean();
     if (!repo) {
       return res.status(404).json({ msg: "Repo not found" });
     }
 
-    // 🔐 Ownership check
+    /* =========================
+       🔐 Ownership check
+    ========================= */
     if (repo.userId.toString() !== req.user.id) {
       return res.status(403).json({ msg: "Unauthorized" });
     }
 
-    // ⚡ Parallel queries
-    const [dependencyCount, vulnerabilities, alerts] = await Promise.all([
-      Dependency.countDocuments({ repoId }),
-      Vulnerability.find({ repoId }).lean(),
-      Alert.find({ repoId }).sort({ createdAt: -1 }).limit(5).lean()
+    /* =========================
+       🔥 VERSION SYSTEM
+    ========================= */
+    const latestVersion = repo.scanCount || 0;
+    const prevVersion = latestVersion > 1 ? latestVersion - 1 : null;
+
+    /* =========================
+       ⚡ Parallel Queries (LATEST ONLY)
+    ========================= */
+    const [dependencies, vulnerabilities, alerts] = await Promise.all([
+      Dependency.find({
+        repoId,
+        versionGroup: latestVersion
+      }).lean(),
+
+      Vulnerability.find({
+        repoId,
+        versionGroup: latestVersion
+      }).lean(),
+
+      Alert.find({ repoId })
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .lean()
     ]);
 
+    const dependencyCount = dependencies.length;
     const vulnCount = vulnerabilities.length;
 
-    // 📊 severity count
+    /* =========================
+       📊 Severity Count
+    ========================= */
     let critical = 0, high = 0, medium = 0, low = 0;
 
     vulnerabilities.forEach(v => {
@@ -37,39 +63,68 @@ export const getDashboard = async (req, res) => {
       else low++;
     });
 
-    // 🧠 risk score
-    let riskScore = (
+    /* =========================
+       🧠 Risk Score
+    ========================= */
+    let riskScore =
       critical * 3 +
       high * 2 +
       medium * 1 +
-      low * 0.5
-    );
+      low * 0.5;
 
     riskScore = Math.min(10, Math.max(1, riskScore));
 
-    // ❤️ health
+    /* =========================
+       ❤️ Health
+    ========================= */
     const health = Math.max(0, 100 - riskScore * 10);
 
-    // 🔥 NEW: Top vulnerabilities (for UI)
-    const topVulnerabilities = vulnerabilities
+    /* =========================
+       🔥 TOP VULNERABILITIES
+    ========================= */
+    const topVulnerabilities = [...vulnerabilities]
       .sort((a, b) => {
         const order = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
         return order[b.severity] - order[a.severity];
       })
       .slice(0, 5);
 
-    // 🔥 NEW: trend (dummy for now, can improve)
-    const riskTrend = repo.riskScore
-      ? riskScore - repo.riskScore
-      : 0;
+    /* =========================
+       🔁 TREND (LATEST vs PREVIOUS)
+    ========================= */
+    let trend = 0;
 
+    if (prevVersion) {
+      const prevVulns = await Vulnerability.find({
+        repoId,
+        versionGroup: prevVersion
+      }).lean();
+
+      let prevScore = 0;
+
+      prevVulns.forEach(v => {
+        if (v.severity === "CRITICAL") prevScore += 3;
+        else if (v.severity === "HIGH") prevScore += 2;
+        else if (v.severity === "MEDIUM") prevScore += 1;
+        else prevScore += 0.5;
+      });
+
+      prevScore = Math.min(10, Math.max(1, prevScore));
+
+      trend = riskScore - prevScore;
+    }
+
+    /* =========================
+       📊 RESPONSE
+    ========================= */
     res.json({
       repo: {
         id: repo._id,
         name: repo.name,
         url: repo.url,
         status: repo.status,
-        lastScanned: repo.lastScanned
+        lastScanned: repo.lastScanned,
+        version: latestVersion
       },
 
       stats: {
@@ -77,7 +132,7 @@ export const getDashboard = async (req, res) => {
         health,
         dependencies: dependencyCount,
         vulnerabilities: vulnCount,
-        trend: riskTrend // 🔥 new
+        trend // 🔥 +ve = worse, -ve = better
       },
 
       severity: {
@@ -87,12 +142,16 @@ export const getDashboard = async (req, res) => {
         low
       },
 
-      topVulnerabilities, // 🔥 new
+      topVulnerabilities,
 
       alerts
     });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.log("❌ Dashboard error:", err.message);
+
+    res.status(500).json({
+      error: "Failed to fetch dashboard"
+    });
   }
 };

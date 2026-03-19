@@ -6,8 +6,35 @@ export const githubWebhook = async (req, res) => {
   try {
     const event = req.headers["x-github-event"];
 
+    console.log("\n📡 ===============================");
     console.log("📡 GitHub Event:", event);
+    console.log("==================================");
 
+    /* =========================
+       🟢 INSTALLATION EVENTS
+    ========================= */
+    if (event === "installation") {
+      const action = req.body.action;
+
+      console.log("🔧 Installation Event:", action);
+
+      // when user installs GitHub App
+      if (action === "created") {
+        const installationId = req.body.installation.id;
+        const account = req.body.installation.account?.login;
+
+        console.log("✅ App Installed by:", account);
+        console.log("🆔 Installation ID:", installationId);
+
+        // 👉 optional: save installationId in user DB
+      }
+
+      return res.sendStatus(200);
+    }
+
+    /* =========================
+       🚀 PUSH EVENT (MAIN FLOW)
+    ========================= */
     if (event === "push") {
       const repoUrl = req.body.repository.html_url
         .replace(".git", "")
@@ -15,13 +42,16 @@ export const githubWebhook = async (req, res) => {
 
       const installationId = req.body.installation?.id;
 
-      console.log("🚀 Push detected:", repoUrl);
+      console.log("🚀 Push detected on:", repoUrl);
 
       if (!installationId) {
-        console.log("❌ No installation ID");
+        console.log("❌ No installation ID (App not installed)");
         return res.sendStatus(200);
       }
 
+      /* =========================
+         🔍 FIND REPO
+      ========================= */
       const repo = await Repo.findOne({ url: repoUrl });
 
       if (!repo) {
@@ -29,35 +59,60 @@ export const githubWebhook = async (req, res) => {
         return res.sendStatus(200);
       }
 
-      // 🔥 Prevent duplicate scans
-      if (
-        repo.lastScanned &&
-        Date.now() - new Date(repo.lastScanned).getTime() < 10000
-      ) {
-        console.log("⚠️ Skipping duplicate scan");
+      /* =========================
+         🛑 DUPLICATE PROTECTION
+      ========================= */
+      if (repo.lastScanned) {
+        const diff = Date.now() - new Date(repo.lastScanned).getTime();
+
+        if (diff < 10000) {
+          console.log("⚠️ Skipping duplicate scan (within 10s)");
+          return res.sendStatus(200);
+        }
+      }
+
+      console.log("📦 Repo:", repo.name);
+      console.log("🆔 Installation ID:", installationId);
+
+      /* =========================
+         🔐 GET INSTALLATION TOKEN
+      ========================= */
+      let token;
+
+      try {
+        token = await getInstallationToken(installationId);
+        console.log("🔐 Installation token generated");
+      } catch (err) {
+        console.log("❌ Token generation failed:", err.message);
         return res.sendStatus(200);
       }
 
-      console.log("📦 Repo URL:", repoUrl);
-      console.log("🆔 Installation ID:", installationId);
-
-      const token = await getInstallationToken(installationId);
-
-      await analyzeRepo(
-        {
-          body: {
-            url: repoUrl,
-            repoId: repo._id,
-            token
+      /* =========================
+         🔥 AUTO ANALYZE
+      ========================= */
+      try {
+        await analyzeRepo(
+          {
+            body: {
+              url: repoUrl,
+              repoId: repo._id,
+              token
+            },
+            user: { id: repo.userId }
           },
-          user: { id: repo.userId }
-        },
-        { json: () => {} }
-      );
+          { json: () => {} }
+        );
 
-      console.log("✅ Auto scan completed via webhook");
+        console.log("✅ Auto scan completed via webhook");
+
+      } catch (err) {
+        console.log("❌ Analyze failed:", err.message);
+      }
     }
 
+    /* =========================
+       DEFAULT RESPONSE
+    ========================= */
     res.sendStatus(200);
 
   } catch (err) {

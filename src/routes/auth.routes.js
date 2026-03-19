@@ -2,7 +2,9 @@ import express from "express";
 import {
   register,
   login,
-  getProfile
+  getProfile,
+  githubLogin,
+  githubCallback
 } from "../controllers/auth.controller.js";
 
 import { authMiddleware } from "../middleware/auth.middleware.js";
@@ -14,35 +16,27 @@ const router = express.Router();
 ========================= */
 
 // 📝 Register
-router.post("/register", async (req, res, next) => {
-  try {
-    await register(req, res);
-  } catch (err) {
-    next(err);
-  }
-});
+router.post("/register", register);
 
 // 🔐 Login
-router.post("/login", async (req, res, next) => {
-  try {
-    await login(req, res);
-  } catch (err) {
-    next(err);
-  }
-});
+router.post("/login", login);
+
+/* =========================
+   🔗 GITHUB OAUTH (NEW 🔥)
+========================= */
+
+// 🚀 Start GitHub Login
+router.get("/github", githubLogin);
+
+// 🔄 GitHub Callback
+router.get("/github/callback", githubCallback);
 
 /* =========================
    👤 USER ROUTES (PROTECTED)
 ========================= */
 
 // 👤 Profile
-router.get("/me", authMiddleware, async (req, res, next) => {
-  try {
-    await getProfile(req, res);
-  } catch (err) {
-    next(err);
-  }
-});
+router.get("/me", authMiddleware, getProfile);
 
 /* =========================
    🚪 LOGOUT

@@ -1,6 +1,18 @@
 import User from "../models/user.model.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import axios from "axios";
+
+/* =========================
+   🔐 JWT GENERATOR
+========================= */
+const generateToken = (userId) => {
+  return jwt.sign(
+    { id: userId },
+    process.env.JWT_SECRET,
+    { expiresIn: "7d" }
+  );
+};
 
 /* =========================
    🔐 REGISTER
@@ -9,7 +21,6 @@ export const register = async (req, res) => {
   try {
     const { name, email, password } = req.body;
 
-    // validation
     if (!name || !email || !password) {
       return res.status(400).json({ msg: "All fields are required" });
     }
@@ -20,13 +31,11 @@ export const register = async (req, res) => {
       });
     }
 
-    // check existing
     const existing = await User.findOne({ email });
     if (existing) {
       return res.status(400).json({ msg: "Email already exists" });
     }
 
-    // hash password
     const hashed = await bcrypt.hash(password, 10);
 
     const user = await User.create({
@@ -35,12 +44,7 @@ export const register = async (req, res) => {
       password: hashed
     });
 
-    // 🔥 TOKEN
-    const token = jwt.sign(
-      { id: user._id },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+    const token = generateToken(user._id);
 
     res.status(201).json({
       msg: "User registered successfully",
@@ -71,10 +75,7 @@ export const login = async (req, res) => {
       });
     }
 
-    // 🔥 FIX: password explicitly select karo
     const user = await User.findOne({ email }).select("+password");
-
-    console.log("USER:", user);
 
     if (!user || !user.password) {
       return res.status(401).json({
@@ -84,21 +85,13 @@ export const login = async (req, res) => {
 
     const match = await bcrypt.compare(password, user.password);
 
-    console.log("MATCH:", match);
-
     if (!match) {
       return res.status(401).json({
         msg: "Invalid credentials"
       });
     }
 
-    console.log("JWT_SECRET:", process.env.JWT_SECRET);
-
-    const token = jwt.sign(
-      { id: user._id },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+    const token = generateToken(user._id);
 
     res.json({
       msg: "Login successful",
@@ -106,13 +99,101 @@ export const login = async (req, res) => {
       user: {
         id: user._id,
         name: user.name,
-        email: user.email
+        email: user.email,
+        avatar: user.avatar
       }
     });
 
   } catch (err) {
-    console.log("❌ LOGIN ERROR FULL:", err);
+    console.log("❌ LOGIN ERROR:", err.message);
     res.status(500).json({ error: err.message });
+  }
+};
+
+/* =========================
+   🔗 GITHUB OAUTH LOGIN 🔥
+========================= */
+
+// STEP 1 → redirect to GitHub
+export const githubLogin = (req, res) => {
+  const redirectUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&scope=repo`;
+
+  res.redirect(redirectUrl);
+};
+
+// STEP 2 → callback from GitHub
+export const githubCallback = async (req, res) => {
+  try {
+    const { code } = req.query;
+
+    if (!code) {
+      return res.status(400).json({ msg: "No code provided" });
+    }
+
+    /* =========================
+       🔑 GET ACCESS TOKEN
+    ========================= */
+    const tokenRes = await axios.post(
+      "https://github.com/login/oauth/access_token",
+      {
+        client_id: process.env.GITHUB_CLIENT_ID,
+        client_secret: process.env.GITHUB_CLIENT_SECRET,
+        code
+      },
+      {
+        headers: { Accept: "application/json" }
+      }
+    );
+
+    const accessToken = tokenRes.data.access_token;
+
+    /* =========================
+       👤 GET USER DATA
+    ========================= */
+    const userRes = await axios.get("https://api.github.com/user", {
+      headers: {
+        Authorization: `token ${accessToken}`
+      }
+    });
+
+    const githubUser = userRes.data;
+
+    /* =========================
+       🔍 CHECK USER
+    ========================= */
+    let user = await User.findOne({ githubId: githubUser.id });
+
+    if (!user) {
+      user = await User.create({
+        name: githubUser.name || githubUser.login,
+        email: githubUser.email || `${githubUser.login}@github.com`,
+        githubId: githubUser.id,
+        githubUsername: githubUser.login,
+        githubAccessToken: accessToken,
+        avatar: githubUser.avatar_url
+      });
+    } else {
+      // 🔥 update token
+      user.githubAccessToken = accessToken;
+      await user.save();
+    }
+
+    /* =========================
+       🔐 GENERATE JWT
+    ========================= */
+    const token = generateToken(user._id);
+
+    // 👉 redirect to frontend (IMPORTANT)
+    res.redirect(
+      `${process.env.FRONTEND_URL}/auth/success?token=${token}`
+    );
+
+  } catch (err) {
+    console.log("❌ GitHub OAuth Error:", err.message);
+
+    res.status(500).json({
+      error: "GitHub authentication failed"
+    });
   }
 };
 

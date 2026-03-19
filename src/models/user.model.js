@@ -1,47 +1,73 @@
 import mongoose from "mongoose";
 
-const userSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: true,
-    trim: true
+const userSchema = new mongoose.Schema(
+  {
+    /* =========================
+       👤 BASIC INFO
+    ========================= */
+    name: {
+      type: String,
+      required: true,
+      trim: true
+    },
+
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true
+    },
+
+    password: {
+      type: String,
+      select: false // 🔐 hidden by default
+    },
+
+    avatar: {
+      type: String
+    },
+
+    /* =========================
+       🔗 GITHUB OAUTH
+    ========================= */
+    githubId: {
+      type: String,
+      index: true
+    },
+
+    githubUsername: {
+      type: String
+    },
+
+    githubAccessToken: {
+      type: String // 🔥 OAuth token (optional use)
+    },
+
+    /* =========================
+       🔥 GITHUB APP (IMPORTANT)
+    ========================= */
+    installationId: {
+      type: Number // 🔥 used for auto token generation
+    },
+
+    /* =========================
+       🧠 ROLE SYSTEM
+    ========================= */
+    role: {
+      type: String,
+      enum: ["user", "admin"],
+      default: "user"
+    }
   },
+  { timestamps: true }
+);
 
-  email: {
-    type: String,
-    required: true,
-    unique: true,
-    lowercase: true
-  },
+/* =========================
+   ⚡ INDEXES (PERFORMANCE)
+========================= */
 
-  password: {
-    type: String,
-    required: true,
-    select: false // 🔐 password hidden by default
-  },
-
-  // 🔗 GitHub login support
-  githubId: {
-    type: String
-  },
-
-  avatar: {
-    type: String
-  },
-
-  // 🧠 role system (future)
-  role: {
-    type: String,
-    enum: ["user", "admin"],
-    default: "user"
-  },
-
-  // ⏱️ tracking
-  createdAt: {
-    type: Date,
-    default: Date.now
-  }
-
-}, { timestamps: true });
+userSchema.index({ email: 1 });
+userSchema.index({ githubId: 1 });
 
 export default mongoose.model("User", userSchema);

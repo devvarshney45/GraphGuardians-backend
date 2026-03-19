@@ -1,6 +1,7 @@
 import Repo from "../models/repo.model.js";
 import axios from "axios";
 import { analyzeRepo } from "./analysis.controller.js";
+import { getInstallationToken } from "../services/githubApp.service.js";
 
 /* =========================
    🔧 HELPERS
@@ -26,20 +27,31 @@ const parseRepo = (url) => {
   };
 };
 
-// 🔥 TOKEN FIX (ENV + USER)
+/* =========================
+   🔐 GET HEADERS (SMART TOKEN)
+========================= */
+
 const getHeaders = (token) => {
-  return {
-    Authorization: `token ${token || process.env.GITHUB_TOKEN}`
+  const finalToken = token || process.env.GITHUB_TOKEN;
+
+  const headers = {
+    Accept: "application/vnd.github+json"
   };
+
+  if (finalToken) {
+    headers.Authorization = `token ${finalToken}`;
+  }
+
+  return headers;
 };
 
 /* =========================
-   🔥 CREATE WEBHOOK (NEW)
+   🔥 CREATE WEBHOOK
 ========================= */
 
 const createWebhook = async (owner, repo, token) => {
   try {
-    const webhookUrl = `${process.env.BASE_URL}/api/commits/webhook`;
+    const webhookUrl = `${process.env.BASE_URL}/api/github/webhook`;
 
     await axios.post(
       `https://api.github.com/repos/${owner}/${repo}/hooks`,
@@ -60,7 +72,6 @@ const createWebhook = async (owner, repo, token) => {
     console.log("✅ Webhook created");
 
   } catch (err) {
-    // ⚠️ webhook already exists ignore
     if (err.response?.status === 422) {
       console.log("⚠️ Webhook already exists");
       return;
@@ -71,12 +82,12 @@ const createWebhook = async (owner, repo, token) => {
 };
 
 /* =========================
-   ➕ ADD REPO + AUTO SCAN + WEBHOOK 🔥
+   ➕ ADD REPO (PRO FLOW 🔥)
 ========================= */
 
 export const addRepo = async (req, res) => {
   try {
-    const { url, token } = req.body;
+    const { url } = req.body;
     const userId = req.user?.id;
 
     if (!url) {
@@ -85,6 +96,31 @@ export const addRepo = async (req, res) => {
 
     const { owner, repo, cleanUrl } = parseRepo(url);
 
+    /* =========================
+       🔥 GET USER (TOKEN SOURCE)
+    ========================= */
+    const user = req.user;
+
+    let token = null;
+
+    // 🔥 Priority:
+    // 1. GitHub App installation token
+    // 2. OAuth token
+    // 3. ENV fallback
+
+    if (user.installationId) {
+      token = await getInstallationToken(user.installationId);
+      console.log("🔐 Using GitHub App token");
+    } else if (user.githubAccessToken) {
+      token = user.githubAccessToken;
+      console.log("🔐 Using OAuth token");
+    } else {
+      console.log("⚠️ Using fallback token");
+    }
+
+    /* =========================
+       🔍 VALIDATE REPO
+    ========================= */
     let repoData;
 
     try {
@@ -97,18 +133,26 @@ export const addRepo = async (req, res) => {
 
     } catch (err) {
       console.log("❌ GitHub API error:", err.response?.data || err.message);
+
       return res.status(404).json({
-        msg: "Repository not found or private"
+        msg: "Repository not found or private (install GitHub App)"
       });
     }
 
-    // ❌ duplicate check
+    /* =========================
+       ❌ DUPLICATE CHECK
+    ========================= */
     const existing = await Repo.findOne({ url: cleanUrl, userId });
+
     if (existing) {
-      return res.status(400).json({ msg: "Repo already added" });
+      return res.status(400).json({
+        msg: "Repo already added"
+      });
     }
 
-    // ✅ create repo
+    /* =========================
+       ✅ CREATE REPO
+    ========================= */
     const newRepo = await Repo.create({
       userId,
       name: repoData.full_name,
@@ -118,14 +162,15 @@ export const addRepo = async (req, res) => {
       forks: repoData.forks_count,
       language: repoData.language,
 
-      githubToken: token, // 🔥 save token
-
+      // 🔥 no need to store user token anymore
       riskScore: 0,
       status: "scanning"
     });
 
+    console.log(`📦 Repo added: ${repoData.full_name}`);
+
     /* =========================
-       🔥 AUTO WEBHOOK
+       🔥 CREATE WEBHOOK
     ========================= */
     await createWebhook(owner, repo, token);
 
@@ -156,7 +201,7 @@ export const addRepo = async (req, res) => {
     }
 
     res.status(201).json({
-      msg: "Repo added, webhook created & scanned successfully 🚀",
+      msg: "Repo added & auto scanned successfully 🚀",
       repo: newRepo
     });
 

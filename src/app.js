@@ -23,6 +23,7 @@ import reportRoutes from "./routes/report.routes.js";
 import scanRoutes from "./routes/scan.routes.js";
 
 import { errorMiddleware } from "./middleware/error.middleware.js";
+import repoInsightsRoutes from "./routes/repoInsights.routes.js";
 
 const app = express();
 
@@ -63,6 +64,7 @@ app.use("/api/graph", graphRoutes);
 app.use("/api/fix", fixRoutes);
 app.use("/api/report", reportRoutes);
 app.use("/api/scan-history", scanRoutes);
+app.use("/api/repos", repoInsightsRoutes);
 
 /* =========================
    🧪 HEALTH CHECK
@@ -94,3 +96,5 @@ app.use((req, res) => {
 app.use(errorMiddleware);
 
 export default app;
+
+

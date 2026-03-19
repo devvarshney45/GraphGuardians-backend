@@ -21,16 +21,26 @@ import {
 
 export const analyzeRepo = async (req, res) => {
   try {
+    /* =========================
+       🔥 SAFE RESPONSE (FIX)
+    ========================= */
+    const safeRes = {
+      status: () => safeRes,
+      json: () => {}
+    };
+
+    const response = res?.status ? res : safeRes;
+
     const { url, repoId, token } = req.body;
 
     /* =========================
        🔐 Repo check
     ========================= */
     const repo = await Repo.findById(repoId);
-    if (!repo) return res.status(404).json({ msg: "Repo not found" });
+    if (!repo) return response.status(404).json({ msg: "Repo not found" });
 
     if (repo.userId.toString() !== req.user.id) {
-      return res.status(403).json({ msg: "Unauthorized" });
+      return response.status(403).json({ msg: "Unauthorized" });
     }
 
     const currentVersion = repo.scanCount || 0;
@@ -61,7 +71,7 @@ export const analyzeRepo = async (req, res) => {
     const pkg = await fetchPackageJson(url, token);
 
     if (!pkg) {
-      return res.status(400).json({
+      return response.status(400).json({
         msg: "package.json not accessible"
       });
     }
@@ -165,7 +175,11 @@ export const analyzeRepo = async (req, res) => {
     /* =========================
        TIGERGRAPH
     ========================= */
-    await pushToTigerGraph(repoId, uniqueDeps, formattedVulns);
+    try {
+      await pushToTigerGraph(repoId, uniqueDeps, formattedVulns);
+    } catch (err) {
+      console.log("⚠️ TigerGraph error ignored:", err.message);
+    }
 
     /* =========================
        SCAN HISTORY
@@ -203,7 +217,7 @@ export const analyzeRepo = async (req, res) => {
     /* =========================
        RESPONSE
     ========================= */
-    res.json({
+    return response.json({
       version: newVersion,
       scanCount: updatedRepo.scanCount,
       repo: {
@@ -229,8 +243,10 @@ export const analyzeRepo = async (req, res) => {
   } catch (err) {
     console.log("❌ Analyze Error:", err.message);
 
-    res.status(500).json({
-      error: err.message
-    });
+    if (res?.status) {
+      return res.status(500).json({
+        error: err.message
+      });
+    }
   }
 };

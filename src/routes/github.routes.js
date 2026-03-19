@@ -5,7 +5,6 @@ import {
   getBranches,
   getPackageJson
 } from "../controllers/github.controller.js";
-import express from "express";
 import { githubWebhook } from "../controllers/webhook.controller.js";
 
 const router = express.Router();

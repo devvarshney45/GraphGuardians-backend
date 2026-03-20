@@ -2,7 +2,7 @@ import axios from "axios";
 
 const TG_URL = process.env.TG_URL;
 const GRAPH = process.env.TG_GRAPH;
-const API_KEY = process.env.TG_API_KEY; // ✅ correct env
+const API_KEY = process.env.TG_API_KEY;
 
 export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
   try {
@@ -11,6 +11,10 @@ export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
     console.log("==================================");
 
     console.log("🔑 API KEY:", API_KEY ? "Loaded ✅" : "Missing ❌");
+
+    if (!API_KEY) {
+      throw new Error("TigerGraph API key missing");
+    }
 
     const vertices = {};
     const edges = {};
@@ -78,10 +82,13 @@ export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
     });
 
     /* =========================
-       🚀 API CALL
+       🚀 FINAL API CALL (FIXED)
     ========================= */
 
-    const endpoint = `${TG_URL}/restpp/graph/${GRAPH}`;
+    // 🔥 IMPORTANT: encode token
+    const encodedToken = encodeURIComponent(API_KEY);
+
+    const endpoint = `${TG_URL}/restpp/graph/${GRAPH}?access_token=${encodedToken}`;
 
     console.log("📡 Sending to:", endpoint);
     console.log("📦 Vertices:", Object.keys(vertices).length);
@@ -91,8 +98,7 @@ export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
       { vertices, edges },
       {
         headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${API_KEY}` // ✅ FINAL FIX
+          "Content-Type": "application/json"
         }
       }
     );

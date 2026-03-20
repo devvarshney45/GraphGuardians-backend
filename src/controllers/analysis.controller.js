@@ -9,8 +9,11 @@ import { extractDependencies } from "../utils/parser.util.js";
 import { checkVulnerabilities } from "../services/vulnerability.service.js";
 import { buildGraph } from "../utils/graph.util.js";
 import { calculateRisk } from "../utils/risk.util.js";
-import { pushToTigerGraph } from "../services/tigergraph.service.js";
+import { pushToNeo4j } from "../services/neo4j.service.js";
 import { generateAIInsights } from "../services/ai.service.js";
+
+import { getDependencyTree } from "../services/dependencyTree.service.js";
+import { extractDependencyEdges } from "../utils/treeParser.util.js";
 
 import {
   compareDependencies,
@@ -21,9 +24,6 @@ import {
 
 export const analyzeRepo = async (req, res) => {
   try {
-    /* =========================
-       🔥 SAFE RESPONSE (FIX)
-    ========================= */
     const safeRes = {
       status: () => safeRes,
       json: () => {}
@@ -34,7 +34,7 @@ export const analyzeRepo = async (req, res) => {
     const { url, repoId, token } = req.body;
 
     /* =========================
-       🔐 Repo check
+       🔐 Repo validation
     ========================= */
     const repo = await Repo.findById(repoId);
     if (!repo) return response.status(404).json({ msg: "Repo not found" });
@@ -46,9 +46,6 @@ export const analyzeRepo = async (req, res) => {
     const currentVersion = repo.scanCount || 0;
     const newVersion = currentVersion + 1;
 
-    /* =========================
-       🔥 START LOG
-    ========================= */
     console.log("\n🚀 ===============================");
     console.log(`📦 Repo: ${repo.name}`);
     console.log(`🔢 Version: ${currentVersion} → ${newVersion}`);
@@ -66,7 +63,7 @@ export const analyzeRepo = async (req, res) => {
       : [];
 
     /* =========================
-       FETCH PACKAGE.JSON
+       FETCH package.json
     ========================= */
     const pkg = await fetchPackageJson(url, token);
 
@@ -81,12 +78,14 @@ export const analyzeRepo = async (req, res) => {
     /* =========================
        EXTRACT DEPENDENCIES
     ========================= */
-    let deps = extractDependencies(pkg);
+    const rawDeps = extractDependencies(pkg);
 
     const seen = new Set();
     const uniqueDeps = [];
 
-    for (const d of deps) {
+    for (const d of rawDeps) {
+      if (!d.name) continue;
+
       const cleanName = d.name.toLowerCase().trim();
       const key = `${cleanName}_${newVersion}`;
 
@@ -97,9 +96,9 @@ export const analyzeRepo = async (req, res) => {
           repoId,
           versionGroup: newVersion,
           name: cleanName,
-          version: d.version,
-          cleanVersion: d.cleanVersion,
-          type: d.type
+          version: d.version || "unknown",
+          cleanVersion: d.cleanVersion || "",
+          type: d.type || "prod"
         });
       }
     }
@@ -107,7 +106,7 @@ export const analyzeRepo = async (req, res) => {
     console.log(`📦 Dependencies: ${uniqueDeps.length}`);
 
     /* =========================
-       COMPARE
+       COMPARE CHANGES
     ========================= */
     const depChanges = compareDependencies(oldDeps, uniqueDeps);
 
@@ -116,14 +115,12 @@ export const analyzeRepo = async (req, res) => {
     console.log(`❌ Removed: ${depChanges.removed.length}`);
     console.log(`♻️ Updated: ${depChanges.updated.length}`);
 
-    depChanges.updated.forEach(d => {
-      console.log(`   🔁 ${d.name}: ${d.oldVersion} → ${d.newVersion}`);
-    });
-
     /* =========================
        SAVE DEPENDENCIES
     ========================= */
-    await Dependency.insertMany(uniqueDeps, { ordered: false });
+    if (uniqueDeps.length > 0) {
+      await Dependency.insertMany(uniqueDeps, { ordered: false });
+    }
 
     /* =========================
        VULNERABILITIES
@@ -135,25 +132,24 @@ export const analyzeRepo = async (req, res) => {
       versionGroup: newVersion,
       package: v.package?.toLowerCase().trim(),
       version: v.version,
-      severity: v.severity,
+      severity: v.severity || "unknown",
       description: v.description,
       cve: v.cve,
       fix: v.fix
     }));
 
-    await Vulnerability.insertMany(formattedVulns, { ordered: false });
+    if (formattedVulns.length > 0) {
+      await Vulnerability.insertMany(formattedVulns, { ordered: false });
+    }
 
     console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
 
     /* =========================
-       DIFF VULNS
+       ALERTS
     ========================= */
     const newVulns = findNewVulnerabilities(oldVulns, formattedVulns);
     const fixedVulns = findFixedVulnerabilities(oldVulns, formattedVulns);
 
-    /* =========================
-       ALERTS
-    ========================= */
     const alerts = generateAlerts(repoId, newVulns, fixedVulns);
 
     if (alerts.length > 0) {
@@ -164,21 +160,56 @@ export const analyzeRepo = async (req, res) => {
     }
 
     /* =========================
-       GRAPH + RISK + AI
+       GRAPH + RISK
     ========================= */
     const graph = buildGraph(uniqueDeps, formattedVulns, repoId);
     const risk = calculateRisk(formattedVulns);
-    const aiInsights = await generateAIInsights(formattedVulns);
 
     console.log(`⚠️ Risk Score: ${risk}`);
 
     /* =========================
-       TIGERGRAPH
+       AI (SAFE)
+    ========================= */
+    let aiInsights = [];
+    try {
+      aiInsights = await generateAIInsights(formattedVulns);
+    } catch (err) {
+      console.log("⚠️ AI failed:", err.message);
+    }
+
+    /* =========================
+       🔥 DEPENDENCY TREE (FINAL FIX)
+    ========================= */
+    let depEdges = [];
+
+    try {
+      console.log("🌳 Generating dependency tree...");
+
+      const tree = getDependencyTree(url); // ✅ CRITICAL FIX
+
+      if (tree) {
+        depEdges = extractDependencyEdges(tree);
+      }
+
+    } catch (err) {
+      console.log("⚠️ Tree parsing failed:", err.message);
+    }
+
+    console.log(`🔗 Dependency edges: ${depEdges.length}`);
+
+    /* =========================
+       🔥 NEO4J SYNC
     ========================= */
     try {
-      await pushToTigerGraph(repoId, uniqueDeps, formattedVulns);
+      await pushToNeo4j(
+        repoId,
+        uniqueDeps,
+        formattedVulns,
+        depEdges
+      );
+      console.log("🧠 Neo4j Sync Done ✅");
     } catch (err) {
-      console.log("⚠️ TigerGraph error ignored:", err.message);
+      console.log("⚠️ Neo4j error ignored:", err.message);
     }
 
     /* =========================
@@ -205,28 +236,16 @@ export const analyzeRepo = async (req, res) => {
         lastScanned: new Date(),
         status: "scanned"
       },
-      { new: true }
+      { returnDocument: "after" }
     ).lean();
 
-    /* =========================
-       FINAL LOG
-    ========================= */
     console.log("📊 Scan Completed ✅");
     console.log("==================================\n");
 
-    /* =========================
-       RESPONSE
-    ========================= */
     return response.json({
       version: newVersion,
       scanCount: updatedRepo.scanCount,
-      repo: {
-        id: updatedRepo._id,
-        name: updatedRepo.name,
-        url: updatedRepo.url,
-        lastScanned: updatedRepo.lastScanned,
-        status: updatedRepo.status
-      },
+      repo: updatedRepo,
       stats: {
         riskScore: risk,
         dependencies: uniqueDeps.length,

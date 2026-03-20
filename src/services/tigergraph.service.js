@@ -1,121 +1,88 @@
 import axios from "axios";
 
-const TG_URL = process.env.TG_URL;      // e.g. https://<host>:9000
-const GRAPH = process.env.TG_GRAPH;    // graph name
-const TOKEN = process.env.TG_TOKEN;    // RESTPP token
+const TG_URL = process.env.TG_URL;
+const GRAPH = process.env.TG_GRAPH;
+const API_KEY = process.env.TG_API_KEY;
 
-// 🧠 Helper: unique push
-const pushUnique = (arr, item, key = "id") => {
-  if (!arr.find(i => i[key] === item[key] && i.type === item.type)) {
-    arr.push(item);
-  }
-};
-
-export const pushToTigerGraph = async (repoId, deps, vulns) => {
+export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
   try {
-    const vertices = [];
-    const edges = [];
+    console.log("\n🧠 ===============================");
+    console.log("🧠 TigerGraph Sync Started");
+    console.log("==================================");
 
-    // 🟢 Repo vertex
-    pushUnique(vertices, {
-      type: "Repo",
-      id: repoId,
-      attributes: {}
-    });
+    console.log("🔑 API KEY:", API_KEY);
 
-    // 🟡 Dependencies
+    const vertices = {};
+    const edges = {};
+
+    /* Repo */
+    vertices["Repo"] = {
+      [repoId]: { name: repoId }
+    };
+
+    /* Dependencies */
+    vertices["Package"] = {};
+    edges["uses"] = {};
+
     deps.forEach(dep => {
-      pushUnique(vertices, {
-        type: "Package",
-        id: dep.name,
-        attributes: {
-          version: dep.version
-        }
-      });
+      if (!dep.name) return;
 
-      edges.push({
-        from_type: "Repo",
-        from_id: repoId,
-        to_type: "Package",
-        to_id: dep.name,
-        type: "uses",
-        attributes: {}
-      });
+      vertices["Package"][dep.name] = {
+        name: dep.name,
+        version: dep.cleanVersion || dep.version || "unknown"
+      };
 
-      // 🔗 parent chain (VERY IMPORTANT)
-      if (dep.parent) {
-        edges.push({
-          from_type: "Package",
-          from_id: dep.parent,
-          to_type: "Package",
-          to_id: dep.name,
-          type: "depends_on",
-          attributes: {}
-        });
-      }
+      if (!edges["uses"][repoId]) edges["uses"][repoId] = {};
+      edges["uses"][repoId][dep.name] = {};
     });
 
-    // 🔴 Vulnerabilities
+    /* Vulnerabilities */
+    vertices["Vulnerability"] = {};
+    edges["has_vulnerability"] = {};
+
     vulns.forEach(v => {
-      const vulnId = `${v.package}_${v.cve || "vuln"}`;
+      if (!v.package) return;
 
-      pushUnique(vertices, {
-        type: "Vulnerability",
-        id: vulnId,
-        attributes: {
-          severity: v.severity
-        }
-      });
+      const id = `${v.package}_${v.cve || "NA"}`;
 
-      edges.push({
-        from_type: "Package",
-        from_id: v.package,
-        to_type: "Vulnerability",
-        to_id: vulnId,
-        type: "has_vulnerability",
-        attributes: {
-          severity: v.severity
-        }
-      });
+      vertices["Vulnerability"][id] = {
+        id,
+        severity: v.severity || "UNKNOWN"
+      };
+
+      if (!edges["has_vulnerability"][v.package]) {
+        edges["has_vulnerability"][v.package] = {};
+      }
+
+      edges["has_vulnerability"][v.package][id] = {
+        severity: v.severity || "UNKNOWN"
+      };
     });
 
-    // 🚀 TigerGraph RESTPP Upsert
-    const endpoint = `${TG_URL}/graph/${GRAPH}`;
+    /* 🚀 FINAL CALL (API KEY BASED) */
 
-    await axios.post(
+    const endpoint = `${TG_URL}/restpp/graph/${GRAPH}`;
+
+    console.log("📡 Sending to:", endpoint);
+
+    const res = await axios.post(
       endpoint,
-      {
-        vertices: vertices.reduce((acc, v) => {
-          if (!acc[v.type]) acc[v.type] = {};
-          acc[v.type][v.id] = v.attributes || {};
-          return acc;
-        }, {}),
-        edges: edges.reduce((acc, e) => {
-          if (!acc[e.from_type]) acc[e.from_type] = {};
-          if (!acc[e.from_type][e.type]) acc[e.from_type][e.type] = {};
-          if (!acc[e.from_type][e.type][e.from_id]) {
-            acc[e.from_type][e.type][e.from_id] = {};
-          }
-          if (!acc[e.from_type][e.type][e.from_id][e.to_type]) {
-            acc[e.from_type][e.type][e.from_id][e.to_type] = {};
-          }
-
-          acc[e.from_type][e.type][e.from_id][e.to_type][e.to_id] =
-            e.attributes || {};
-
-          return acc;
-        }, {})
-      },
+      { vertices, edges },
       {
         headers: {
-          Authorization: `Bearer ${TOKEN}`
+          "Content-Type": "application/json",
+          "x-api-key": API_KEY
         }
       }
     );
 
-    console.log("🔥 TigerGraph sync success");
+    console.log("✅ TigerGraph sync success");
+    console.log(JSON.stringify(res.data, null, 2));
+    console.log("==================================\n");
 
   } catch (err) {
-    console.log("❌ TigerGraph error:", err.response?.data || err.message);
+    console.log("\n❌ TigerGraph error:");
+    console.log(err.response?.data || err.message);
+    console.log("==================================\n");
   }
 };

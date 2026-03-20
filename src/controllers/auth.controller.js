@@ -111,17 +111,17 @@ export const login = async (req, res) => {
 };
 
 /* =========================
-   🔗 GITHUB OAUTH LOGIN 🔥
+   🔗 GITHUB OAUTH LOGIN
 ========================= */
 
-// STEP 1 → redirect to GitHub
+// STEP 1 → redirect
 export const githubLogin = (req, res) => {
   const redirectUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&scope=repo`;
 
   res.redirect(redirectUrl);
 };
 
-// STEP 2 → callback from GitHub
+// STEP 2 → callback
 export const githubCallback = async (req, res) => {
   try {
     const { code } = req.query;
@@ -130,9 +130,7 @@ export const githubCallback = async (req, res) => {
       return res.status(400).json({ msg: "No code provided" });
     }
 
-    /* =========================
-       🔑 GET ACCESS TOKEN
-    ========================= */
+    // 🔑 access token
     const tokenRes = await axios.post(
       "https://github.com/login/oauth/access_token",
       {
@@ -147,9 +145,7 @@ export const githubCallback = async (req, res) => {
 
     const accessToken = tokenRes.data.access_token;
 
-    /* =========================
-       👤 GET USER DATA
-    ========================= */
+    // 👤 user data
     const userRes = await axios.get("https://api.github.com/user", {
       headers: {
         Authorization: `token ${accessToken}`
@@ -158,9 +154,6 @@ export const githubCallback = async (req, res) => {
 
     const githubUser = userRes.data;
 
-    /* =========================
-       🔍 CHECK USER
-    ========================= */
     let user = await User.findOne({ githubId: githubUser.id });
 
     if (!user) {
@@ -173,26 +166,64 @@ export const githubCallback = async (req, res) => {
         avatar: githubUser.avatar_url
       });
     } else {
-      // 🔥 update token
       user.githubAccessToken = accessToken;
       await user.save();
     }
 
-    /* =========================
-       🔐 GENERATE JWT
-    ========================= */
     const token = generateToken(user._id);
 
-    // 👉 redirect to frontend (IMPORTANT)
     res.redirect(
       `${process.env.FRONTEND_URL}/auth/success?token=${token}`
     );
 
   } catch (err) {
     console.log("❌ GitHub OAuth Error:", err.message);
-
     res.status(500).json({
       error: "GitHub authentication failed"
+    });
+  }
+};
+
+/* =========================
+   🔔 SAVE DEVICE TOKEN (FCM)
+========================= */
+export const saveDeviceToken = async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({
+        msg: "Device token required"
+      });
+    }
+
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        msg: "User not found"
+      });
+    }
+
+    // ensure array
+    if (!user.fcmTokens) {
+      user.fcmTokens = [];
+    }
+
+    // avoid duplicate
+    if (!user.fcmTokens.includes(token)) {
+      user.fcmTokens.push(token);
+      await user.save();
+    }
+
+    res.json({
+      msg: "Device token saved successfully"
+    });
+
+  } catch (err) {
+    console.log("❌ Save device token error:", err.message);
+    res.status(500).json({
+      error: err.message
     });
   }
 };

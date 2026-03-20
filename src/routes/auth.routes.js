@@ -4,7 +4,8 @@ import {
   login,
   getProfile,
   githubLogin,
-  githubCallback
+  githubCallback,
+  saveDeviceToken // 🔥 NEW
 } from "../controllers/auth.controller.js";
 
 import { authMiddleware } from "../middleware/auth.middleware.js";
@@ -22,7 +23,7 @@ router.post("/register", register);
 router.post("/login", login);
 
 /* =========================
-   🔗 GITHUB OAUTH (NEW 🔥)
+   🔗 GITHUB OAUTH
 ========================= */
 
 // 🚀 Start GitHub Login
@@ -30,6 +31,17 @@ router.get("/github", githubLogin);
 
 // 🔄 GitHub Callback
 router.get("/github/callback", githubCallback);
+
+/* =========================
+   🔔 FIREBASE (NEW 🔥)
+========================= */
+
+// 📱 Save Device Token
+router.post(
+  "/save-device-token",
+  authMiddleware,
+  saveDeviceToken
+);
 
 /* =========================
    👤 USER ROUTES (PROTECTED)
@@ -42,7 +54,7 @@ router.get("/me", authMiddleware, getProfile);
    🚪 LOGOUT
 ========================= */
 
-// 🔥 Logout (JWT → frontend handles)
+// 🔥 Logout
 router.post("/logout", authMiddleware, (req, res) => {
   res.json({
     success: true,

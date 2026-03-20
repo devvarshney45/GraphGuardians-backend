@@ -4,7 +4,10 @@ import { authMiddleware } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
-// 🔍 Analyze Repo
-router.post("/", authMiddleware, analyzeRepo);
+/**
+ * 🔍 Analyze Repository
+ * POST /api/analysis/analyze
+ */
+router.post("/analyze", authMiddleware, analyzeRepo);
 
 export default router;

@@ -2,13 +2,15 @@ import axios from "axios";
 
 const TG_URL = process.env.TG_URL;
 const GRAPH = process.env.TG_GRAPH;
-const API_KEY = process.env.TG_TOKEN; // ✅ FIX
+const API_KEY = process.env.TG_API_KEY; // ✅ correct env
 
 export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
   try {
     console.log("\n🧠 ===============================");
     console.log("🧠 TigerGraph Sync Started");
     console.log("==================================");
+
+    console.log("🔑 API KEY:", API_KEY ? "Loaded ✅" : "Missing ❌");
 
     const vertices = {};
     const edges = {};
@@ -86,14 +88,11 @@ export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
 
     const res = await axios.post(
       endpoint,
-      {
-        vertices,
-        edges
-      },
+      { vertices, edges },
       {
         headers: {
           "Content-Type": "application/json",
-          "X-API-Key": API_KEY // ✅ FIX (capital X)
+          Authorization: `Bearer ${API_KEY}` // ✅ FINAL FIX
         }
       }
     );

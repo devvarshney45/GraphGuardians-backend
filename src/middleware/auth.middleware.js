@@ -6,28 +6,60 @@ export const authMiddleware = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
-    /* ❌ NO TOKEN */
+    /* =========================
+       ❌ NO TOKEN
+    ========================= */
     if (!authHeader) {
       return res.status(401).json({
         msg: "Access denied. No token provided"
       });
     }
 
-    /* ❌ INVALID FORMAT */
+    /* =========================
+       ❌ INVALID FORMAT
+    ========================= */
     if (!authHeader.startsWith("Bearer ")) {
       return res.status(401).json({
         msg: "Invalid token format"
       });
     }
 
-    /* 🔑 EXTRACT TOKEN */
+    /* =========================
+       🔑 EXTRACT TOKEN
+    ========================= */
     const token = authHeader.split(" ")[1];
 
-    /* 🔓 VERIFY TOKEN */
+    if (!token) {
+      return res.status(401).json({
+        msg: "Token missing"
+      });
+    }
+
+    /* =========================
+       🔓 VERIFY TOKEN
+    ========================= */
     const decoded = jwt.verify(token, ENV.JWT_SECRET);
 
-    /* 👤 OPTIONAL: DB CHECK */
-    const user = await User.findById(decoded.id).select("_id role");
+    console.log("🔍 DECODED TOKEN:", decoded); // DEBUG
+
+    /* =========================
+       🧠 HANDLE ALL CASES
+    ========================= */
+    const userId =
+      decoded.id ||
+      decoded._id ||
+      decoded.userId;
+
+    if (!userId) {
+      return res.status(401).json({
+        msg: "Invalid token payload"
+      });
+    }
+
+    /* =========================
+       👤 GET USER
+    ========================= */
+    const user = await User.findById(userId).select("_id role");
 
     if (!user) {
       return res.status(401).json({
@@ -35,9 +67,11 @@ export const authMiddleware = async (req, res, next) => {
       });
     }
 
-    /* ✅ ATTACH LIGHT USER */
+    /* =========================
+       ✅ ATTACH USER
+    ========================= */
     req.user = {
-      id: user._id,
+      id: user._id.toString(),
       role: user.role
     };
 
@@ -45,12 +79,20 @@ export const authMiddleware = async (req, res, next) => {
 
   } catch (err) {
 
+    console.log("❌ AUTH ERROR:", err.message);
+
+    /* =========================
+       ❌ TOKEN EXPIRED
+    ========================= */
     if (err.name === "TokenExpiredError") {
       return res.status(401).json({
         msg: "Token expired"
       });
     }
 
+    /* =========================
+       ❌ INVALID TOKEN
+    ========================= */
     if (err.name === "JsonWebTokenError") {
       return res.status(401).json({
         msg: "Invalid token"

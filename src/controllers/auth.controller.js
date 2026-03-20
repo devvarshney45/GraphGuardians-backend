@@ -2,7 +2,6 @@ import User from "../models/user.model.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import axios from "axios";
-
 /* =========================
    🔐 JWT GENERATOR
 ========================= */
@@ -235,4 +234,36 @@ export const getProfile = async (req, res) => {
   res.json({
     user: req.user
   });
+};
+
+
+
+// controllers/auth.controller.js
+
+
+export const getMe = async (req, res) => {
+  try {
+    const userId = req.user.id; // JWT middleware se
+
+    const user = await User.findById(userId).select(
+      "_id name email installationId"
+    );
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json({
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        installationId: user.installationId || null,
+        githubConnected: !!user.installationId
+      }
+    });
+
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 };

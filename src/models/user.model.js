@@ -25,7 +25,8 @@ const userSchema = new mongoose.Schema(
     },
 
     avatar: {
-      type: String
+      type: String,
+      default: ""
     },
 
     /* =========================
@@ -41,14 +42,16 @@ const userSchema = new mongoose.Schema(
     },
 
     githubAccessToken: {
-      type: String // 🔥 OAuth token (optional use)
+      type: String,
+      select: false // 🔐 never send to frontend
     },
 
     /* =========================
-       🔥 GITHUB APP (IMPORTANT)
+       🔥 GITHUB APP
     ========================= */
     installationId: {
-      type: Number // 🔥 used for auto token generation
+      type: Number,
+      default: null
     },
 
     /* =========================
@@ -59,17 +62,54 @@ const userSchema = new mongoose.Schema(
       enum: ["user", "admin"],
       default: "user"
     },
-    fcmTokens: {type :[String],
-      default:[]}
+
+    /* =========================
+       🔔 NOTIFICATIONS
+    ========================= */
+    fcmTokens: {
+      type: [String],
+      default: []
+    }
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+  }
 );
 
 /* =========================
-   ⚡ INDEXES (PERFORMANCE)
+   ⚡ INDEXES (FIXED)
 ========================= */
 
-userSchema.index({ email: 1 });
+// ❌ duplicate avoid kiya
+// email already unique hai, dubara index nahi chahiye
+
 userSchema.index({ githubId: 1 });
+
+/* =========================
+   🔥 VIRTUAL FIELD
+========================= */
+
+// frontend ke liye
+userSchema.virtual("githubConnected").get(function () {
+  return !!this.installationId;
+});
+
+/* =========================
+   🔥 SAFE RESPONSE
+========================= */
+
+// jo frontend ko bhejna hai
+userSchema.methods.toSafeObject = function () {
+  return {
+    id: this._id,
+    name: this.name,
+    email: this.email,
+    avatar: this.avatar,
+    installationId: this.installationId,
+    githubConnected: !!this.installationId
+  };
+};
 
 export default mongoose.model("User", userSchema);

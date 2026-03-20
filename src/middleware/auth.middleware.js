@@ -6,45 +6,28 @@ export const authMiddleware = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
-    /* =========================
-       ❌ NO TOKEN
-    ========================= */
+    /* ❌ NO TOKEN */
     if (!authHeader) {
       return res.status(401).json({
         msg: "Access denied. No token provided"
       });
     }
 
-    /* =========================
-       ❌ INVALID FORMAT
-       Expect: Bearer <token>
-    ========================= */
+    /* ❌ INVALID FORMAT */
     if (!authHeader.startsWith("Bearer ")) {
       return res.status(401).json({
         msg: "Invalid token format"
       });
     }
 
-    /* =========================
-       🔑 EXTRACT TOKEN
-    ========================= */
+    /* 🔑 EXTRACT TOKEN */
     const token = authHeader.split(" ")[1];
 
-    if (!token) {
-      return res.status(401).json({
-        msg: "Token missing"
-      });
-    }
-
-    /* =========================
-       🔓 VERIFY TOKEN
-    ========================= */
+    /* 🔓 VERIFY TOKEN */
     const decoded = jwt.verify(token, ENV.JWT_SECRET);
 
-    /* =========================
-       👤 GET USER
-    ========================= */
-    const user = await User.findById(decoded.id).select("-password");
+    /* 👤 OPTIONAL: DB CHECK */
+    const user = await User.findById(decoded.id).select("_id role");
 
     if (!user) {
       return res.status(401).json({
@@ -52,27 +35,22 @@ export const authMiddleware = async (req, res, next) => {
       });
     }
 
-    /* =========================
-       ✅ ATTACH USER
-    ========================= */
-    req.user = user;
+    /* ✅ ATTACH LIGHT USER */
+    req.user = {
+      id: user._id,
+      role: user.role
+    };
 
     next();
 
   } catch (err) {
 
-    /* =========================
-       ❌ TOKEN EXPIRED
-    ========================= */
     if (err.name === "TokenExpiredError") {
       return res.status(401).json({
-        msg: "Token expired, please login again"
+        msg: "Token expired"
       });
     }
 
-    /* =========================
-       ❌ INVALID TOKEN
-    ========================= */
     if (err.name === "JsonWebTokenError") {
       return res.status(401).json({
         msg: "Invalid token"
@@ -80,7 +58,7 @@ export const authMiddleware = async (req, res, next) => {
     }
 
     return res.status(401).json({
-      msg: "Unauthorized access"
+      msg: "Unauthorized"
     });
   }
 };

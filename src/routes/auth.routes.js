@@ -7,6 +7,7 @@ import {
   githubCallback,
   saveDeviceToken // 🔥 NEW
 } from "../controllers/auth.controller.js";
+import { getMe } from "../controllers/auth.controller.js";
 
 import { authMiddleware } from "../middleware/auth.middleware.js";
 
@@ -61,5 +62,12 @@ router.post("/logout", authMiddleware, (req, res) => {
     msg: "Logout successful. Remove token from client."
   });
 });
+router.get("/me",authMiddleware, getMe);
+
 
 export default router;
+
+
+// routes/auth.routes.js
+
+

@@ -2,7 +2,7 @@ import axios from "axios";
 
 const TG_URL = process.env.TG_URL;
 const GRAPH = process.env.TG_GRAPH;
-const API_KEY = process.env.TG_API_KEY;
+const API_KEY = process.env.TG_TOKEN; // ✅ FIX
 
 export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
   try {
@@ -10,19 +10,25 @@ export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
     console.log("🧠 TigerGraph Sync Started");
     console.log("==================================");
 
-    console.log("🔑 API KEY:", API_KEY);
-
     const vertices = {};
     const edges = {};
 
-    /* Repo */
+    /* =========================
+       📦 REPO
+    ========================= */
     vertices["Repo"] = {
-      [repoId]: { name: repoId }
+      [repoId]: {
+        name: repoId
+      }
     };
 
-    /* Dependencies */
+    /* =========================
+       📦 PACKAGES
+    ========================= */
     vertices["Package"] = {};
-    edges["uses"] = {};
+    edges["Repo"] = {
+      uses: {}
+    };
 
     deps.forEach(dep => {
       if (!dep.name) return;
@@ -32,46 +38,62 @@ export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
         version: dep.cleanVersion || dep.version || "unknown"
       };
 
-      if (!edges["uses"][repoId]) edges["uses"][repoId] = {};
-      edges["uses"][repoId][dep.name] = {};
+      if (!edges["Repo"]["uses"][repoId]) {
+        edges["Repo"]["uses"][repoId] = {
+          Package: {}
+        };
+      }
+
+      edges["Repo"]["uses"][repoId]["Package"][dep.name] = {};
     });
 
-    /* Vulnerabilities */
+    /* =========================
+       🚨 VULNERABILITIES
+    ========================= */
     vertices["Vulnerability"] = {};
-    edges["has_vulnerability"] = {};
+    edges["Package"] = {
+      has_vulnerability: {}
+    };
 
     vulns.forEach(v => {
       if (!v.package) return;
 
-      const id = `${v.package}_${v.cve || "NA"}`;
+      const vulnId = `${v.package}_${v.cve || "NA"}`;
 
-      vertices["Vulnerability"][id] = {
-        id,
+      vertices["Vulnerability"][vulnId] = {
         severity: v.severity || "UNKNOWN"
       };
 
-      if (!edges["has_vulnerability"][v.package]) {
-        edges["has_vulnerability"][v.package] = {};
+      if (!edges["Package"]["has_vulnerability"][v.package]) {
+        edges["Package"]["has_vulnerability"][v.package] = {
+          Vulnerability: {}
+        };
       }
 
-      edges["has_vulnerability"][v.package][id] = {
+      edges["Package"]["has_vulnerability"][v.package]["Vulnerability"][vulnId] = {
         severity: v.severity || "UNKNOWN"
       };
     });
 
-    /* 🚀 FINAL CALL (API KEY BASED) */
+    /* =========================
+       🚀 API CALL
+    ========================= */
 
     const endpoint = `${TG_URL}/restpp/graph/${GRAPH}`;
 
     console.log("📡 Sending to:", endpoint);
+    console.log("📦 Vertices:", Object.keys(vertices).length);
 
     const res = await axios.post(
       endpoint,
-      { vertices, edges },
+      {
+        vertices,
+        edges
+      },
       {
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": API_KEY
+          "X-API-Key": API_KEY // ✅ FIX (capital X)
         }
       }
     );

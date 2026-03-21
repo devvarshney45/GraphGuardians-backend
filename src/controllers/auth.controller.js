@@ -107,19 +107,29 @@ export const login = async (req, res) => {
 
 // STEP 1 → redirect
 export const githubLogin = (req, res) => {
+  console.log("🚀 GitHub OAuth started");
+
   const redirectUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&scope=repo`;
+
   res.redirect(redirectUrl);
 };
 
 // STEP 2 → callback
 export const githubCallback = async (req, res) => {
   try {
+    console.log("📥 GitHub Callback HIT");
+    console.log("Query:", req.query);
+
     const { code } = req.query;
 
     if (!code) {
-      return res.status(400).json({ msg: "No code provided" });
+      console.log("❌ No code received");
+      return res.redirect(`${process.env.FRONTEND_URL}/error`);
     }
 
+    /* =========================
+       🔑 GET ACCESS TOKEN
+    ========================= */
     const tokenRes = await axios.post(
       "https://github.com/login/oauth/access_token",
       {
@@ -134,6 +144,14 @@ export const githubCallback = async (req, res) => {
 
     const accessToken = tokenRes.data.access_token;
 
+    if (!accessToken) {
+      console.log("❌ No access token");
+      return res.redirect(`${process.env.FRONTEND_URL}/error`);
+    }
+
+    /* =========================
+       👤 GET USER DATA
+    ========================= */
     const userRes = await axios.get("https://api.github.com/user", {
       headers: {
         Authorization: `token ${accessToken}`
@@ -143,10 +161,13 @@ export const githubCallback = async (req, res) => {
     const githubUser = userRes.data;
     const githubUsername = githubUser.login.toLowerCase();
 
-    console.log("👤 GitHub Login:", githubUsername);
+    console.log("👤 GitHub User:", githubUsername);
 
     let user = await User.findOne({ githubId: githubUser.id });
 
+    /* =========================
+       🆕 CREATE USER
+    ========================= */
     if (!user) {
       user = await User.create({
         name: githubUser.name || githubUser.login,
@@ -156,26 +177,41 @@ export const githubCallback = async (req, res) => {
         githubAccessToken: accessToken,
         avatar: githubUser.avatar_url
       });
+
       console.log("🆕 New GitHub user created");
-    } else {
+    }
+
+    /* =========================
+       🔄 UPDATE USER
+    ========================= */
+    else {
       user.githubAccessToken = accessToken;
       user.githubUsername = githubUsername;
       user.avatar = githubUser.avatar_url;
       await user.save();
+
       console.log("🔄 Existing user updated");
     }
 
+    /* =========================
+       🔐 TOKEN + REDIRECT
+    ========================= */
     const token = generateToken(user._id);
 
-    res.redirect(
-      `${process.env.FRONTEND_URL}/auth/success?token=${token}`
-    );
+    const FRONTEND = process.env.FRONTEND_URL || "http://localhost:5173";
+
+    const redirectUrl = `${FRONTEND}/auth/success?token=${token}`;
+
+    console.log("🔁 Redirecting to:", redirectUrl);
+
+    return res.redirect(redirectUrl);
 
   } catch (err) {
     console.log("❌ GitHub OAuth Error:", err.message);
-    res.status(500).json({
-      error: "GitHub authentication failed"
-    });
+
+    const FRONTEND = process.env.FRONTEND_URL || "http://localhost:5173";
+
+    return res.redirect(`${FRONTEND}/error`);
   }
 };
 
@@ -222,7 +258,7 @@ export const saveDeviceToken = async (req, res) => {
 };
 
 /* =========================
-   👤 GET PROFILE (FIX)
+   👤 GET PROFILE
 ========================= */
 export const getProfile = async (req, res) => {
   try {

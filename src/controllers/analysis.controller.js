@@ -3,6 +3,7 @@ import Dependency from "../models/dependency.model.js";
 import Vulnerability from "../models/vulnerability.model.js";
 import Alert from "../models/alert.model.js";
 import ScanHistory from "../models/scanHistory.model.js";
+import User from "../models/user.model.js";
 
 import { fetchPackageJson } from "../services/github.service.js";
 import { extractDependencies } from "../utils/parser.util.js";
@@ -10,6 +11,7 @@ import { checkVulnerabilities } from "../services/vulnerability.service.js";
 import { calculateRisk } from "../utils/risk.util.js";
 import { pushToNeo4j } from "../services/neo4j.service.js";
 import { generateAIInsights } from "../services/ai.service.js";
+import { sendNotification } from "../services/firebase.service.js";
 
 import { getDependencyTree } from "../services/dependencyTree.service.js";
 import { extractDependencyEdges } from "../utils/treeParser.util.js";
@@ -42,7 +44,7 @@ export const analyzeRepo = async (req, res) => {
       return response.status(403).json({ msg: "Unauthorized" });
     }
 
-    const repoIdStr = String(repoId); // 💀 CRITICAL FIX
+    const repoIdStr = String(repoId);
 
     const currentVersion = repo.scanCount || 0;
     const newVersion = currentVersion + 1;
@@ -93,7 +95,7 @@ export const analyzeRepo = async (req, res) => {
         seen.add(key);
 
         uniqueDeps.push({
-          repoId,
+          repoId: repoIdStr,
           versionGroup: newVersion,
           name: cleanName,
           version: String(d.version || "unknown"),
@@ -117,7 +119,7 @@ export const analyzeRepo = async (req, res) => {
     const vulns = await checkVulnerabilities(uniqueDeps);
 
     const formattedVulns = vulns.map(v => ({
-      repoId,
+      repoId: repoIdStr,
       versionGroup: newVersion,
       package: String(v.package || "").toLowerCase().trim(),
       version: String(v.version || ""),
@@ -133,7 +135,7 @@ export const analyzeRepo = async (req, res) => {
     console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
 
     /* =========================
-       ALERTS
+       ALERTS + 🔥 FIREBASE
     ========================= */
     const alerts = generateAlerts(
       repoIdStr,
@@ -141,7 +143,26 @@ export const analyzeRepo = async (req, res) => {
       findFixedVulnerabilities(oldVulns, formattedVulns)
     );
 
-    if (alerts.length > 0) await Alert.insertMany(alerts);
+    if (alerts.length > 0) {
+      await Alert.insertMany(alerts);
+      console.log(`🔔 Alerts: ${alerts.length}`);
+
+      try {
+        const user = await User.findById(repo.userId);
+        const tokens = user?.deviceTokens || [];
+
+        await sendNotification(
+          tokens,
+          "🚨 Security Alert",
+          `${alerts.length} new vulnerabilities detected`
+        );
+      } catch (err) {
+        console.log("❌ Firebase failed:", err.message);
+      }
+
+    } else {
+      console.log("✅ No new alerts");
+    }
 
     /* =========================
        🌳 DEPENDENCY TREE
@@ -154,9 +175,7 @@ export const analyzeRepo = async (req, res) => {
       const tree = await getDependencyTree(url, token);
 
       if (tree) {
-        const rawEdges = extractDependencyEdges(tree);
-
-        cleanEdges = rawEdges
+        cleanEdges = extractDependencyEdges(tree)
           .filter(e => e && e.from && e.to)
           .map(e => ({
             from: String(e.from).toLowerCase().trim(),
@@ -171,30 +190,28 @@ export const analyzeRepo = async (req, res) => {
     console.log(`🔗 Clean edges: ${cleanEdges.length}`);
 
     /* =========================
-       🔥 CLEAN DATA FOR NEO4J
-    ========================= */
-    const cleanDeps = uniqueDeps.map(d => ({
-      name: String(d.name),
-      version: String(d.version)
-    }));
-
-    const cleanVulns = formattedVulns.map(v => ({
-      package: String(v.package),
-      id: String(v.cve || `${v.package}_unknown`),
-      severity: String(v.severity)
-    }));
-
-    /* =========================
-       🔥 NEO4J SYNC (FIXED 💀)
+       🔥 NEO4J SYNC
     ========================= */
     await pushToNeo4j(
-      repoIdStr, // 💀 IMPORTANT
-      cleanDeps,
-      cleanVulns,
+      repoIdStr,
+      uniqueDeps.map(d => ({
+        name: d.name,
+        version: d.version
+      })),
+      formattedVulns.map(v => ({
+        package: v.package,
+        id: v.cve || `${v.package}_unknown`,
+        severity: v.severity
+      })),
       cleanEdges
     );
 
     console.log("🧠 Neo4j Sync Done ✅");
+
+    /* =========================
+       RISK CALC
+    ========================= */
+    const risk = calculateRisk(formattedVulns);
 
     /* =========================
        SCAN HISTORY
@@ -202,7 +219,7 @@ export const analyzeRepo = async (req, res) => {
     await ScanHistory.create({
       repoId: repoIdStr,
       version: newVersion,
-      riskScore: calculateRisk(formattedVulns),
+      riskScore: risk,
       dependencyCount: uniqueDeps.length,
       vulnerabilityCount: formattedVulns.length
     });
@@ -214,7 +231,7 @@ export const analyzeRepo = async (req, res) => {
       repoId,
       {
         scanCount: newVersion,
-        riskScore: calculateRisk(formattedVulns),
+        riskScore: risk,
         dependencyCount: uniqueDeps.length,
         vulnerabilityCount: formattedVulns.length,
         lastScanned: new Date(),
@@ -230,9 +247,9 @@ export const analyzeRepo = async (req, res) => {
       version: newVersion,
       repo: updatedRepo,
       stats: {
-        riskScore: updatedRepo.riskScore,
-        dependencies: updatedRepo.dependencyCount,
-        vulnerabilities: updatedRepo.vulnerabilityCount
+        riskScore: risk,
+        dependencies: uniqueDeps.length,
+        vulnerabilities: formattedVulns.length
       },
       alerts
     });

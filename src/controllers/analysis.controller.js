@@ -178,14 +178,14 @@ export const analyzeRepo = async (req, res) => {
     }
 
     /* =========================
-       🔥 DEPENDENCY TREE (FINAL FIX)
+       🔥 DEPENDENCY TREE (FIXED)
     ========================= */
     let depEdges = [];
 
     try {
       console.log("🌳 Generating dependency tree...");
 
-      const tree = getDependencyTree(url); // ✅ CRITICAL FIX
+      const tree = await getDependencyTree(url, token); // ✅ FIXED
 
       if (tree) {
         depEdges = extractDependencyEdges(tree);

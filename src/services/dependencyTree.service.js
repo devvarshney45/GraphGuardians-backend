@@ -3,9 +3,6 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 
-/**
- * 🔥 Clone repo + get dependency tree (PRODUCTION READY)
- */
 export const getDependencyTree = async (repoUrl, token = null) => {
   let tempDir = null;
 
@@ -16,23 +13,22 @@ export const getDependencyTree = async (repoUrl, token = null) => {
     console.log("📁 Temp dir:", tempDir);
 
     /* =========================
-       🔐 BUILD CLONE URL (FIXED)
+       🔐 BUILD CLONE URL (FIXED 💀)
     ========================= */
     let cloneUrl = repoUrl.replace(".git", "").trim();
 
-    // 👉 private repo support
     if (token) {
       cloneUrl = cloneUrl.replace(
         "https://",
-        `https://${token}@`
+        `https://x-access-token:${token}@`
       );
     }
 
     /* =========================
-       ⬇️ CLONE REPO (WITH RETRY)
+       ⬇️ CLONE REPO
     ========================= */
     try {
-      execSync(`git clone ${cloneUrl} ${tempDir}`, {
+      execSync(`git clone --depth=1 ${cloneUrl} ${tempDir}`, {
         stdio: "ignore"
       });
       console.log("⬇️ Repo cloned");
@@ -42,7 +38,7 @@ export const getDependencyTree = async (repoUrl, token = null) => {
     }
 
     /* =========================
-       📦 INSTALL DEPENDENCIES (SAFE)
+       📦 INSTALL DEPENDENCIES
     ========================= */
     try {
       execSync("npm install --legacy-peer-deps --no-audit --no-fund", {
@@ -55,7 +51,7 @@ export const getDependencyTree = async (repoUrl, token = null) => {
     }
 
     /* =========================
-       🌳 GET DEP TREE (FORCE)
+       🌳 GET DEP TREE
     ========================= */
     let output;
 
@@ -83,9 +79,6 @@ export const getDependencyTree = async (repoUrl, token = null) => {
     return null;
 
   } finally {
-    /* =========================
-       🧹 CLEANUP
-    ========================= */
     if (tempDir && fs.existsSync(tempDir)) {
       fs.rmSync(tempDir, { recursive: true, force: true });
       console.log("🧹 Temp repo deleted");

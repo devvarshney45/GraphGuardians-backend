@@ -178,14 +178,14 @@ export const analyzeRepo = async (req, res) => {
     }
 
     /* =========================
-       🔥 DEPENDENCY TREE (FIXED)
+       🔥 DEPENDENCY TREE
     ========================= */
     let depEdges = [];
 
     try {
       console.log("🌳 Generating dependency tree...");
 
-      const tree = await getDependencyTree(url, token); // ✅ FIXED
+      const tree = await getDependencyTree(url, token);
 
       if (tree) {
         depEdges = extractDependencyEdges(tree);
@@ -198,18 +198,40 @@ export const analyzeRepo = async (req, res) => {
     console.log(`🔗 Dependency edges: ${depEdges.length}`);
 
     /* =========================
+       🔥 SANITIZE DATA (CRITICAL 💀)
+    ========================= */
+    const cleanEdges = depEdges.map(e => ({
+      from: String(e.from || e.source || ""),
+      to: String(e.to || e.target || "")
+    }));
+
+    const cleanDeps = uniqueDeps.map(d => ({
+      name: String(d.name),
+      version: String(d.version),
+      type: String(d.type)
+    }));
+
+    const cleanVulns = formattedVulns.map(v => ({
+      package: String(v.package),
+      severity: String(v.severity),
+      version: String(v.version || ""),
+      cve: v.cve ? String(v.cve) : null,
+      fix: v.fix ? String(v.fix) : ""
+    }));
+
+    /* =========================
        🔥 NEO4J SYNC
     ========================= */
     try {
       await pushToNeo4j(
         repoId,
-        uniqueDeps,
-        formattedVulns,
-        depEdges
+        cleanDeps,
+        cleanVulns,
+        cleanEdges
       );
       console.log("🧠 Neo4j Sync Done ✅");
     } catch (err) {
-      console.log("⚠️ Neo4j error ignored:", err.message);
+      console.log("❌ Neo4j Error:", err.message);
     }
 
     /* =========================

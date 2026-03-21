@@ -12,39 +12,30 @@ export const pushToNeo4j = async (
     console.log("🧠 Neo4j Sync Started");
 
     /* =========================
-       🔥 STRICT CLEAN (FINAL FIX 💀)
+       🔥 STRICT CLEAN (ULTRA SAFE)
     ========================= */
 
-    const safeDeps = [];
-    for (const d of deps) {
-      if (d && typeof d.name === "string") {
-        safeDeps.push({
-          name: d.name.toLowerCase().trim(),
-          version: String(d.version || "unknown")
-        });
-      }
-    }
+    const safeDeps = deps
+      .filter(d => d && typeof d.name === "string")
+      .map(d => ({
+        name: String(d.name).toLowerCase().trim(),
+        version: String(d.version || "unknown")
+      }));
 
-    const safeEdges = [];
-    for (const e of depEdges) {
-      if (e && typeof e.from === "string" && typeof e.to === "string") {
-        safeEdges.push({
-          from: e.from.toLowerCase().trim(),
-          to: e.to.toLowerCase().trim()
-        });
-      }
-    }
+    const safeEdges = depEdges
+      .filter(e => e && typeof e.from === "string" && typeof e.to === "string")
+      .map(e => ({
+        from: String(e.from).toLowerCase().trim(),
+        to: String(e.to).toLowerCase().trim()
+      }));
 
-    const safeVulns = [];
-    for (const v of vulns) {
-      if (v && typeof v.package === "string") {
-        safeVulns.push({
-          package: v.package.toLowerCase().trim(),
-          id: String(v.cve || `${v.package}_unknown`),
-          severity: String(v.severity || "UNKNOWN")
-        });
-      }
-    }
+    const safeVulns = vulns
+      .filter(v => v && typeof v.package === "string")
+      .map(v => ({
+        package: String(v.package).toLowerCase().trim(),
+        id: String(v.cve || `${v.package}_unknown`),
+        severity: String(v.severity || "UNKNOWN")
+      }));
 
     /* =========================
        ROOT
@@ -59,7 +50,7 @@ export const pushToNeo4j = async (
     ========================= */
     await session.run(
       `MATCH (r:Repo {id: $repoId})-[*]->(n) DETACH DELETE n`,
-      { repoId }
+      { repoId: String(repoId) }
     );
 
     /* =========================
@@ -67,7 +58,7 @@ export const pushToNeo4j = async (
     ========================= */
     await session.run(
       `MERGE (r:Repo {id: $repoId})`,
-      { repoId }
+      { repoId: String(repoId) }
     );
 
     /* =========================
@@ -84,42 +75,57 @@ export const pushToNeo4j = async (
       MATCH (root:Package {name: $root})
       MERGE (r)-[:USES]->(root)
       `,
-      { repoId, root: ROOT }
+      {
+        repoId: String(repoId),
+        root: ROOT
+      }
     );
 
     /* =========================
-       PACKAGES
+       📦 PACKAGES (SAFE LOOP)
     ========================= */
     for (const dep of safeDeps) {
+      if (!dep.name) continue;
+
       await session.run(
         `
         MERGE (p:Package {name: $name})
         SET p.version = $version
         `,
-        dep
+        {
+          name: dep.name,
+          version: dep.version
+        }
       );
     }
 
     /* =========================
-       EDGES
+       🔗 EDGES (SAFE LOOP)
     ========================= */
     for (const edge of safeEdges) {
+      if (!edge.from || !edge.to) continue;
+
       await session.run(
         `
         MATCH (a:Package {name: $from})
         MATCH (b:Package {name: $to})
         MERGE (a)-[:DEPENDS_ON]->(b)
         `,
-        edge
+        {
+          from: edge.from,
+          to: edge.to
+        }
       );
     }
 
     console.log(`🔗 Dependency edges inserted: ${safeEdges.length}`);
 
     /* =========================
-       VULNERABILITIES
+       🚨 VULNERABILITIES (SAFE LOOP)
     ========================= */
     for (const v of safeVulns) {
+      if (!v.package) continue;
+
       await session.run(
         `
         MATCH (p:Package {name: $package})
@@ -127,7 +133,11 @@ export const pushToNeo4j = async (
         SET vul.severity = $severity
         MERGE (p)-[:HAS_VULN]->(vul)
         `,
-        v
+        {
+          package: v.package,
+          id: v.id,
+          severity: v.severity
+        }
       );
     }
 

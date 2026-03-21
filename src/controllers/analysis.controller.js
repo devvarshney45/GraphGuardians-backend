@@ -10,14 +10,12 @@ import { extractDependencies } from "../utils/parser.util.js";
 import { checkVulnerabilities } from "../services/vulnerability.service.js";
 import { calculateRisk } from "../utils/risk.util.js";
 import { pushToNeo4j } from "../services/neo4j.service.js";
-import { generateAIInsights } from "../services/ai.service.js";
 import { sendNotification } from "../services/firebase.service.js";
 
 import { getDependencyTree } from "../services/dependencyTree.service.js";
 import { extractDependencyEdges } from "../utils/treeParser.util.js";
 
 import {
-  compareDependencies,
   findNewVulnerabilities,
   findFixedVulnerabilities,
   generateAlerts
@@ -35,7 +33,7 @@ export const analyzeRepo = async (req, res) => {
     const { url, repoId, token } = req.body;
 
     /* =========================
-       🔐 Repo validation
+       🔐 VALIDATION
     ========================= */
     const repo = await Repo.findById(repoId);
     if (!repo) return response.status(404).json({ msg: "Repo not found" });
@@ -106,9 +104,6 @@ export const analyzeRepo = async (req, res) => {
 
     console.log(`📦 Dependencies: ${uniqueDeps.length}`);
 
-    /* =========================
-       SAVE DEPENDENCIES
-    ========================= */
     if (uniqueDeps.length > 0) {
       await Dependency.insertMany(uniqueDeps, { ordered: false });
     }
@@ -135,7 +130,7 @@ export const analyzeRepo = async (req, res) => {
     console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
 
     /* =========================
-       ALERTS + 🔥 FIREBASE
+       🔔 ALERTS + FIREBASE DEBUG
     ========================= */
     const alerts = generateAlerts(
       repoIdStr,
@@ -149,13 +144,24 @@ export const analyzeRepo = async (req, res) => {
 
       try {
         const user = await User.findById(repo.userId);
+
+        console.log("👤 USER ID:", user?._id);
+        console.log("📱 TOKENS:", user?.deviceTokens);
+
         const tokens = user?.deviceTokens || [];
 
-        await sendNotification(
-          tokens,
-          "🚨 Security Alert",
-          `${alerts.length} new vulnerabilities detected`
-        );
+        if (!tokens.length) {
+          console.log("⚠️ No tokens found → notification skipped");
+        } else {
+          console.log("🚀 Sending notification...");
+
+          await sendNotification(
+            tokens,
+            "🚨 Security Alert",
+            `${alerts.length} new vulnerabilities detected`
+          );
+        }
+
       } catch (err) {
         console.log("❌ Firebase failed:", err.message);
       }
@@ -190,7 +196,7 @@ export const analyzeRepo = async (req, res) => {
     console.log(`🔗 Clean edges: ${cleanEdges.length}`);
 
     /* =========================
-       🔥 NEO4J SYNC
+       🔥 NEO4J
     ========================= */
     await pushToNeo4j(
       repoIdStr,
@@ -209,13 +215,10 @@ export const analyzeRepo = async (req, res) => {
     console.log("🧠 Neo4j Sync Done ✅");
 
     /* =========================
-       RISK CALC
+       📊 HISTORY
     ========================= */
     const risk = calculateRisk(formattedVulns);
 
-    /* =========================
-       SCAN HISTORY
-    ========================= */
     await ScanHistory.create({
       repoId: repoIdStr,
       version: newVersion,

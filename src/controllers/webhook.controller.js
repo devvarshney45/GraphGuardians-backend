@@ -1,4 +1,5 @@
 import Repo from "../models/repo.model.js";
+import User from "../models/user.model.js";
 import { runAnalysis } from "../services/analysis.service.js";
 import { getInstallationToken } from "../services/githubApp.service.js";
 
@@ -11,89 +12,60 @@ export const githubWebhook = async (req, res) => {
     console.log("==================================");
 
     /* =========================
-       🚀 PUSH EVENT (ONLY MAIN LOGIC)
+       🔥 INSTALL EVENT (FIXED)
+    ========================= */
+    if (event === "installation") {
+      const installationId = req.body.installation?.id;
+      const username = req.body.installation?.account?.login;
+
+      console.log("🆔 Installation ID:", installationId);
+      console.log("👤 GitHub Username:", username);
+
+      if (!installationId || !username) {
+        console.log("❌ Missing data");
+        return res.sendStatus(200);
+      }
+
+      const user = await User.findOne({
+        githubUsername: username
+      });
+
+      if (!user) {
+        console.log("❌ User not found for:", username);
+        return res.sendStatus(200);
+      }
+
+      user.installationId = Number(installationId);
+      await user.save();
+
+      console.log("✅ Installation saved in DB");
+    }
+
+    /* =========================
+       🚀 PUSH EVENT
     ========================= */
     if (event === "push") {
-      const repoUrl = req.body.repository?.html_url
-        ?.replace(".git", "")
-        ?.trim();
+      const repoUrl = req.body.repository.html_url
+        .replace(".git", "")
+        .trim();
 
       const installationId = req.body.installation?.id;
 
-      console.log("🚀 Push detected on:", repoUrl);
+      if (!installationId) return res.sendStatus(200);
 
-      if (!installationId) {
-        console.log("❌ No installation ID in push event");
-        return res.sendStatus(200);
-      }
-
-      if (!repoUrl) {
-        console.log("❌ Repo URL missing");
-        return res.sendStatus(200);
-      }
-
-      /* =========================
-         🔍 FIND REPO IN DB
-      ========================= */
       const repo = await Repo.findOne({ url: repoUrl });
+      if (!repo) return res.sendStatus(200);
 
-      if (!repo) {
-        console.log("⚠️ Repo not found in DB");
-        return res.sendStatus(200);
-      }
-
-      /* =========================
-         🛑 DUPLICATE PROTECTION
-      ========================= */
-      if (repo.lastScanned) {
-        const diff = Date.now() - new Date(repo.lastScanned).getTime();
-
-        if (diff < 10000) {
-          console.log("⚠️ Skipping duplicate scan (within 10s)");
-          return res.sendStatus(200);
-        }
-      }
-
-      console.log("📦 Repo:", repo.name);
-      console.log("🆔 Repo ID:", repo._id);
-
-      /* =========================
-         🔐 GET INSTALLATION TOKEN
-      ========================= */
       let token;
-
       try {
         token = await getInstallationToken(installationId);
-        console.log("🔐 Installation token generated");
-      } catch (err) {
-        console.log("❌ Token error:", err.message);
+      } catch {
         return res.sendStatus(200);
       }
 
-      /* =========================
-         🔥 RUN ANALYSIS
-      ========================= */
-      try {
-        console.log("🚀 Starting full analysis...");
-
-        await runAnalysis(repoUrl, repo._id, token);
-
-        console.log("✅ Full analysis completed");
-      } catch (err) {
-        console.log("❌ Analysis failed:", err.message);
-      }
+      await runAnalysis(repoUrl, repo._id, token);
     }
 
-    /* =========================
-       ℹ️ OPTIONAL LOGGING (OTHER EVENTS)
-    ========================= */
-    if (event !== "push") {
-      console.log("ℹ️ Ignored event:", event);
-    }
-
-    /* =========================
-       DEFAULT RESPONSE
-    ========================= */
     res.sendStatus(200);
 
   } catch (err) {

@@ -7,7 +7,6 @@ import ScanHistory from "../models/scanHistory.model.js";
 import { fetchPackageJson } from "../services/github.service.js";
 import { extractDependencies } from "../utils/parser.util.js";
 import { checkVulnerabilities } from "../services/vulnerability.service.js";
-import { buildGraph } from "../utils/graph.util.js";
 import { calculateRisk } from "../utils/risk.util.js";
 import { pushToNeo4j } from "../services/neo4j.service.js";
 import { generateAIInsights } from "../services/ai.service.js";
@@ -42,6 +41,8 @@ export const analyzeRepo = async (req, res) => {
     if (repo.userId.toString() !== req.user.id) {
       return response.status(403).json({ msg: "Unauthorized" });
     }
+
+    const repoIdStr = String(repoId); // 💀 CRITICAL FIX
 
     const currentVersion = repo.scanCount || 0;
     const newVersion = currentVersion + 1;
@@ -96,18 +97,12 @@ export const analyzeRepo = async (req, res) => {
           versionGroup: newVersion,
           name: cleanName,
           version: String(d.version || "unknown"),
-          cleanVersion: d.cleanVersion || "",
           type: d.type || "prod"
         });
       }
     }
 
     console.log(`📦 Dependencies: ${uniqueDeps.length}`);
-
-    /* =========================
-       COMPARE CHANGES
-    ========================= */
-    const depChanges = compareDependencies(oldDeps, uniqueDeps);
 
     /* =========================
        SAVE DEPENDENCIES
@@ -127,7 +122,6 @@ export const analyzeRepo = async (req, res) => {
       package: String(v.package || "").toLowerCase().trim(),
       version: String(v.version || ""),
       severity: String(v.severity || "unknown"),
-      description: v.description,
       cve: v.cve,
       fix: v.fix
     }));
@@ -142,7 +136,7 @@ export const analyzeRepo = async (req, res) => {
        ALERTS
     ========================= */
     const alerts = generateAlerts(
-      repoId,
+      repoIdStr,
       findNewVulnerabilities(oldVulns, formattedVulns),
       findFixedVulnerabilities(oldVulns, formattedVulns)
     );
@@ -150,13 +144,7 @@ export const analyzeRepo = async (req, res) => {
     if (alerts.length > 0) await Alert.insertMany(alerts);
 
     /* =========================
-       GRAPH + RISK
-    ========================= */
-    const graph = buildGraph(uniqueDeps, formattedVulns, repoId);
-    const risk = calculateRisk(formattedVulns);
-
-    /* =========================
-       🔥 DEPENDENCY TREE (FINAL FIX 💀)
+       🌳 DEPENDENCY TREE
     ========================= */
     let cleanEdges = [];
 
@@ -169,14 +157,10 @@ export const analyzeRepo = async (req, res) => {
         const rawEdges = extractDependencyEdges(tree);
 
         cleanEdges = rawEdges
-          .filter(e =>
-            e &&
-            typeof e.from === "string" &&
-            typeof e.to === "string"
-          )
+          .filter(e => e && e.from && e.to)
           .map(e => ({
-            from: e.from.toLowerCase().trim(),
-            to: e.to.toLowerCase().trim()
+            from: String(e.from).toLowerCase().trim(),
+            to: String(e.to).toLowerCase().trim()
           }));
       }
 
@@ -187,24 +171,24 @@ export const analyzeRepo = async (req, res) => {
     console.log(`🔗 Clean edges: ${cleanEdges.length}`);
 
     /* =========================
-       🔥 CLEAN DATA (FINAL 💀)
+       🔥 CLEAN DATA FOR NEO4J
     ========================= */
     const cleanDeps = uniqueDeps.map(d => ({
-      name: d.name,
-      version: d.version
+      name: String(d.name),
+      version: String(d.version)
     }));
 
     const cleanVulns = formattedVulns.map(v => ({
-      package: v.package,
-      id: v.cve || `${v.package}_unknown`,
-      severity: v.severity
+      package: String(v.package),
+      id: String(v.cve || `${v.package}_unknown`),
+      severity: String(v.severity)
     }));
 
     /* =========================
-       🔥 NEO4J SYNC
+       🔥 NEO4J SYNC (FIXED 💀)
     ========================= */
     await pushToNeo4j(
-      repoId,
+      repoIdStr, // 💀 IMPORTANT
       cleanDeps,
       cleanVulns,
       cleanEdges
@@ -216,9 +200,9 @@ export const analyzeRepo = async (req, res) => {
        SCAN HISTORY
     ========================= */
     await ScanHistory.create({
-      repoId,
+      repoId: repoIdStr,
       version: newVersion,
-      riskScore: risk,
+      riskScore: calculateRisk(formattedVulns),
       dependencyCount: uniqueDeps.length,
       vulnerabilityCount: formattedVulns.length
     });
@@ -230,7 +214,7 @@ export const analyzeRepo = async (req, res) => {
       repoId,
       {
         scanCount: newVersion,
-        riskScore: risk,
+        riskScore: calculateRisk(formattedVulns),
         dependencyCount: uniqueDeps.length,
         vulnerabilityCount: formattedVulns.length,
         lastScanned: new Date(),
@@ -246,11 +230,10 @@ export const analyzeRepo = async (req, res) => {
       version: newVersion,
       repo: updatedRepo,
       stats: {
-        riskScore: risk,
-        dependencies: uniqueDeps.length,
-        vulnerabilities: formattedVulns.length
+        riskScore: updatedRepo.riskScore,
+        dependencies: updatedRepo.dependencyCount,
+        vulnerabilities: updatedRepo.vulnerabilityCount
       },
-      graph,
       alerts
     });
 

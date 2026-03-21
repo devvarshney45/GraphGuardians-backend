@@ -149,8 +149,9 @@ export const githubCallback = async (req, res) => {
 
     const githubUser = userRes.data;
 
-    // 🔥 normalize username (important)
     const githubUsername = githubUser.login.toLowerCase();
+
+    console.log("👤 GitHub Login:", githubUsername);
 
     let user = await User.findOne({ githubId: githubUser.id });
 
@@ -160,24 +161,35 @@ export const githubCallback = async (req, res) => {
     if (!user) {
       user = await User.create({
         name: githubUser.name || githubUser.login,
-        email: githubUser.email || `${githubUsername}@github.com`,
+
+        // 🔥 IMPORTANT: always unique email
+        email: githubUser.email || `${githubUser.id}@github.com`,
+
         githubId: githubUser.id,
-        githubUsername, // 🔥 FIXED
+        githubUsername,
         githubAccessToken: accessToken,
         avatar: githubUser.avatar_url
       });
+
+      console.log("🆕 New GitHub user created");
     }
 
     /* =========================
-       🔄 UPDATE EXISTING USER
+       🔄 UPDATE USER
     ========================= */
     else {
       user.githubAccessToken = accessToken;
-      user.githubUsername = githubUsername; // 🔥 FIXED
+      user.githubUsername = githubUsername;
       user.avatar = githubUser.avatar_url;
+
       await user.save();
+
+      console.log("🔄 Existing user updated");
     }
 
+    /* =========================
+       🔐 GENERATE TOKEN
+    ========================= */
     const token = generateToken(user._id);
 
     res.redirect(

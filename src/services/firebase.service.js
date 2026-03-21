@@ -1,10 +1,35 @@
 import admin from "firebase-admin";
-import serviceAccount from "../config/firebase.json" assert { type: "json" };
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 /* =========================
-   🔥 INIT FIREBASE (SAFE)
+   🔥 FIX __dirname (ESM)
 ========================= */
-if (!admin.apps.length) {
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+/* =========================
+   🔥 LOAD FIREBASE JSON (FIXED 💀)
+========================= */
+let serviceAccount = null;
+
+try {
+  const filePath = path.join(__dirname, "../config/firebase.json");
+
+  const raw = fs.readFileSync(filePath, "utf-8");
+  serviceAccount = JSON.parse(raw);
+
+  console.log("🔥 Firebase JSON loaded");
+
+} catch (err) {
+  console.log("❌ Firebase JSON load failed:", err.message);
+}
+
+/* =========================
+   🔥 INIT FIREBASE
+========================= */
+if (!admin.apps.length && serviceAccount) {
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
   });
@@ -17,7 +42,6 @@ if (!admin.apps.length) {
 ========================= */
 export const sendNotification = async (tokens = [], title, body) => {
   try {
-    // ⚠️ no tokens
     if (!tokens || tokens.length === 0) {
       console.log("⚠️ No FCM tokens found");
       return;
@@ -39,7 +63,9 @@ export const sendNotification = async (tokens = [], title, body) => {
     console.log("✅ Success:", response.successCount);
     console.log("❌ Failed:", response.failureCount);
 
-    // 🔥 optional: remove invalid tokens
+    /* =========================
+       🔥 REMOVE INVALID TOKENS
+    ========================= */
     if (response.failureCount > 0) {
       const failedTokens = [];
 

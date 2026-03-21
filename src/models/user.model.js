@@ -48,7 +48,7 @@ const userSchema = new mongoose.Schema(
     },
 
     /* =========================
-       🔥 GITHUB APP
+       🔥 GITHUB APP (CRITICAL)
     ========================= */
     installationId: {
       type: Number,
@@ -80,23 +80,22 @@ const userSchema = new mongoose.Schema(
 );
 
 /* =========================
-   ⚡ INDEXES (CLEAN)
+   ⚡ INDEXES
 ========================= */
 
-// email already unique → no duplicate index
 userSchema.index({ githubId: 1 });
 
 /* =========================
-   🔥 VIRTUALS
+   🔥 VIRTUALS (FIXED 💀)
 ========================= */
 
-// GitHub connected status
+// ✅ ONLY installationId decides connection
 userSchema.virtual("githubConnected").get(function () {
-  return !!(this.installationId || this.githubId);
+  return !!this.installationId;
 });
 
 /* =========================
-   🔐 SAFE RESPONSE (IMPORTANT)
+   🔐 SAFE RESPONSE (FIXED 💀)
 ========================= */
 
 userSchema.methods.toSafeObject = function () {
@@ -106,17 +105,16 @@ userSchema.methods.toSafeObject = function () {
     email: this.email || "",
     avatar: this.avatar || "",
 
-    // 🔥 GitHub fields (frontend required)
+    // 🔥 GitHub fields (frontend critical)
     installationId: this.installationId || null,
-    githubConnected: !!(this.installationId || this.githubId)
+    githubConnected: !!this.installationId
   };
 };
 
 /* =========================
-   🔄 STATIC HELPER (OPTIONAL)
+   🔄 STATIC HELPER
 ========================= */
 
-// cleaner fetch for controllers
 userSchema.statics.getSafeById = async function (id) {
   const user = await this.findById(id);
   return user ? user.toSafeObject() : null;

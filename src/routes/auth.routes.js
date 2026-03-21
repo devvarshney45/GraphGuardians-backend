@@ -1,4 +1,7 @@
 import express from "express";
+import jwt from "jsonwebtoken";
+import User from "../models/user.model.js";
+
 import {
   register,
   login,
@@ -10,7 +13,6 @@ import {
 } from "../controllers/auth.controller.js";
 
 import { authMiddleware } from "../middleware/auth.middleware.js";
-import User from "../models/user.model.js"; // 🔥 IMPORTANT
 
 const router = express.Router();
 
@@ -38,24 +40,56 @@ router.get("/github/callback", githubCallback);
    🔥 GITHUB APP INSTALL (FIXED 💀)
 ========================= */
 
-// 🚀 Start Install (Frontend will call this)
-router.get("/github/install", authMiddleware, (req, res) => {
-  const url = `https://github.com/apps/${process.env.GITHUB_APP_NAME}/installations/new`;
-  res.redirect(url);
-});
-
-// 🔄 Install Callback (GitHub will hit this)
-router.get("/github/install/callback", authMiddleware, async (req, res) => {
+// 🚀 Start Install (NO authMiddleware ❌)
+router.get("/github/install", async (req, res) => {
   try {
-    const { installation_id } = req.query;
+    const token = req.query.token;
 
-    if (!installation_id) {
-      return res.status(400).json({
-        msg: "No installation_id found"
+    if (!token) {
+      return res.status(401).json({
+        msg: "Token missing"
       });
     }
 
-    const user = await User.findById(req.user.id);
+    // 🔥 VERIFY JWT
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    const user = await User.findById(decoded.id);
+
+    if (!user) {
+      return res.status(404).json({
+        msg: "User not found"
+      });
+    }
+
+    // 🔥 PASS TOKEN IN STATE
+    const installUrl = `https://github.com/apps/${process.env.GITHUB_APP_NAME}/installations/new?state=${token}`;
+
+    return res.redirect(installUrl);
+
+  } catch (err) {
+    console.log("❌ Install route error:", err.message);
+    return res.status(401).json({
+      error: "Invalid token"
+    });
+  }
+});
+
+// 🔄 Install Callback (NO authMiddleware ❌)
+router.get("/github/install/callback", async (req, res) => {
+  try {
+    const { installation_id, state } = req.query;
+
+    if (!installation_id || !state) {
+      return res.status(400).json({
+        msg: "Missing installation_id or state"
+      });
+    }
+
+    // 🔥 VERIFY TOKEN FROM STATE
+    const decoded = jwt.verify(state, process.env.JWT_SECRET);
+
+    const user = await User.findById(decoded.id);
 
     if (!user) {
       return res.status(404).json({
@@ -69,12 +103,11 @@ router.get("/github/install/callback", authMiddleware, async (req, res) => {
 
     console.log("🔥 Installation ID saved:", installation_id);
 
-    // redirect to frontend dashboard
-    res.redirect(`${process.env.FRONTEND_URL}/dashboard`);
+    return res.redirect(`${process.env.FRONTEND_URL}/dashboard`);
 
   } catch (err) {
     console.log("❌ Install callback error:", err.message);
-    res.status(500).json({
+    return res.status(500).json({
       error: err.message
     });
   }

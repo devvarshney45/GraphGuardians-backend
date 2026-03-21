@@ -2,91 +2,230 @@ import Dependency from "../models/dependency.model.js";
 import Vulnerability from "../models/vulnerability.model.js";
 import Alert from "../models/alert.model.js";
 import Repo from "../models/repo.model.js";
+import ScanHistory from "../models/scanHistory.model.js";
 
 import { fetchPackageJson } from "./github.service.js";
 import { extractDependencies } from "../utils/parser.util.js";
 import { checkVulnerabilities } from "./vulnerability.service.js";
-import { buildGraph } from "./graph.service.js";
 import { calculateRisk } from "../utils/risk.util.js";
-import { pushToTigerGraph } from "./tigergraph.service.js";
 import { generateAIInsights } from "./ai.service.js";
 
-export const runAnalysis = async (url, repoId) => {
+import { getDependencyTree } from "./dependencyTree.service.js";
+import { extractDependencyEdges } from "../utils/treeParser.util.js";
+
+import { pushToNeo4j } from "./neo4j.service.js";
+
+import {
+  compareDependencies,
+  findNewVulnerabilities,
+  findFixedVulnerabilities,
+  generateAlerts
+} from "../utils/diff.util.js";
+
+export const runAnalysis = async (url, repoId, token) => {
   try {
-    // 1. Fetch package.json
-    const pkg = await fetchPackageJson(url);
+    console.log("\n🚀 ===============================");
 
-    // 2. Extract dependencies
-    const deps = extractDependencies(pkg);
+    /* =========================
+       🔐 GET REPO
+    ========================= */
+    const repo = await Repo.findById(repoId);
+    if (!repo) throw new Error("Repo not found");
 
-    // 3. Save dependencies
-    await Dependency.deleteMany({ repoId }); // reset old
-    await Dependency.insertMany(
-      deps.map(d => ({
-        repoId,
-        name: d.name,
-        version: d.version,
-        cleanVersion: d.version.replace(/[^0-9.]/g, "")
-      }))
-    );
+    const currentVersion = repo.scanCount || 0;
+    const newVersion = currentVersion + 1;
 
-    // 4. Check vulnerabilities
-    const vulns = await checkVulnerabilities(deps);
+    console.log(`📦 Repo: ${repo.name}`);
+    console.log(`🔢 Version: ${currentVersion} → ${newVersion}`);
 
-    // 5. Save vulnerabilities
-    await Vulnerability.deleteMany({ repoId });
+    /* =========================
+       OLD DATA
+    ========================= */
+    const oldDeps = currentVersion
+      ? await Dependency.find({ repoId, versionGroup: currentVersion }).lean()
+      : [];
 
-    await Vulnerability.insertMany(
-      vulns.map(v => ({
-        repoId,
-        package: v.package,
-        version: v.version,
-        severity: v.severity,
-        description: v.description,
-        fix: `npm update ${v.package}`
-      }))
-    );
+    const oldVulns = currentVersion
+      ? await Vulnerability.find({ repoId, versionGroup: currentVersion }).lean()
+      : [];
 
-    // 6. Build graph
-    const graph = buildGraph(deps, vulns);
+    /* =========================
+       📥 FETCH package.json
+    ========================= */
+    const pkg = await fetchPackageJson(url, token);
+    console.log("📥 package.json fetched");
 
-    // 7. Risk score
-    const risk = calculateRisk(vulns);
+    /* =========================
+       📦 EXTRACT DEPENDENCIES
+    ========================= */
+    const rawDeps = extractDependencies(pkg);
 
-    // 8. AI insights
-    const aiInsights = await generateAIInsights(vulns);
+    const seen = new Set();
+    const uniqueDeps = [];
 
-    // 9. TigerGraph push
-    await pushToTigerGraph(repoId, deps, vulns);
+    for (const d of rawDeps) {
+      if (!d.name) continue;
 
-    // 10. Alerts (if vulnerabilities found)
-    if (vulns.length > 0) {
-      await Alert.create({
-        repoId,
-        message: `⚠️ ${vulns.length} vulnerabilities detected`,
-        severity: "HIGH"
-      });
+      const name = d.name.toLowerCase().trim();
+      const key = `${name}_${newVersion}`;
+
+      if (!seen.has(key)) {
+        seen.add(key);
+
+        uniqueDeps.push({
+          repoId,
+          versionGroup: newVersion,
+          name,
+          version: d.version || "unknown",
+          cleanVersion: d.cleanVersion || "",
+          type: d.type || "prod"
+        });
+      }
     }
 
-    // 11. Update repo
-    await Repo.findByIdAndUpdate(repoId, {
+    console.log(`📦 Dependencies: ${uniqueDeps.length}`);
+
+    /* =========================
+       🔄 COMPARE DEPENDENCIES
+    ========================= */
+    const depChanges = compareDependencies(oldDeps, uniqueDeps);
+
+    console.log(`➕ Added: ${depChanges.added.length}`);
+    console.log(`❌ Removed: ${depChanges.removed.length}`);
+    console.log(`♻️ Updated: ${depChanges.updated.length}`);
+
+    /* =========================
+       💾 SAVE DEPENDENCIES
+    ========================= */
+    if (uniqueDeps.length > 0) {
+      await Dependency.insertMany(uniqueDeps, { ordered: false });
+    }
+
+    /* =========================
+       🚨 VULNERABILITIES
+    ========================= */
+    const vulns = await checkVulnerabilities(uniqueDeps);
+
+    const formattedVulns = vulns.map(v => ({
+      repoId,
+      versionGroup: newVersion,
+      package: v.package?.toLowerCase().trim(),
+      version: v.version,
+      severity: v.severity || "unknown",
+      description: v.description,
+      cve: v.cve,
+      fix: v.fix
+    }));
+
+    if (formattedVulns.length > 0) {
+      await Vulnerability.insertMany(formattedVulns, { ordered: false });
+    }
+
+    console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
+
+    /* =========================
+       🔔 ALERTS (SMART)
+    ========================= */
+    const newVulns = findNewVulnerabilities(oldVulns, formattedVulns);
+    const fixedVulns = findFixedVulnerabilities(oldVulns, formattedVulns);
+
+    const alerts = generateAlerts(repoId, newVulns, fixedVulns);
+
+    if (alerts.length > 0) {
+      await Alert.insertMany(alerts);
+      console.log(`🔔 Alerts generated: ${alerts.length}`);
+    } else {
+      console.log("✅ No new alerts");
+    }
+
+    /* =========================
+       ⚠️ RISK SCORE
+    ========================= */
+    const risk = calculateRisk(formattedVulns);
+    console.log(`⚠️ Risk Score: ${risk}`);
+
+    /* =========================
+       🤖 AI INSIGHTS
+    ========================= */
+    let aiInsights = [];
+    try {
+      aiInsights = await generateAIInsights(formattedVulns);
+    } catch (err) {
+      console.log("⚠️ AI failed:", err.message);
+    }
+
+    /* =========================
+       🌳 DEPENDENCY TREE (CHAIN GRAPH)
+    ========================= */
+    let depEdges = [];
+
+    try {
+      console.log("🌳 Generating dependency tree...");
+
+      const tree = await getDependencyTree(url, token);
+
+      if (tree) {
+        depEdges = extractDependencyEdges(tree);
+      }
+
+    } catch (err) {
+      console.log("⚠️ Tree error:", err.message);
+    }
+
+    console.log(`🔗 Dependency edges: ${depEdges.length}`);
+
+    /* =========================
+       🧠 NEO4J GRAPH PUSH
+    ========================= */
+    try {
+      await pushToNeo4j(repoId, uniqueDeps, formattedVulns, depEdges);
+      console.log("🧠 Neo4j Sync Done ✅");
+    } catch (err) {
+      console.log("⚠️ Neo4j error:", err.message);
+    }
+
+    /* =========================
+       📊 SCAN HISTORY
+    ========================= */
+    await ScanHistory.create({
+      repoId,
+      version: newVersion,
       riskScore: risk,
-      dependencyCount: deps.length,
-      vulnerabilityCount: vulns.length,
+      dependencyCount: uniqueDeps.length,
+      vulnerabilityCount: formattedVulns.length
+    });
+
+    /* =========================
+       🔄 UPDATE REPO
+    ========================= */
+    await Repo.findByIdAndUpdate(repoId, {
+      scanCount: newVersion,
+      riskScore: risk,
+      dependencyCount: uniqueDeps.length,
+      vulnerabilityCount: formattedVulns.length,
       lastScanned: new Date(),
       status: "scanned"
     });
 
+    console.log("📊 Scan Completed ✅");
+    console.log("==================================\n");
+
+    /* =========================
+       📦 RETURN
+    ========================= */
     return {
-      dependencies: deps,
-      vulnerabilities: vulns,
-      graph,
+      version: newVersion,
+      dependencies: uniqueDeps,
+      vulnerabilities: formattedVulns,
+      changes: depChanges,
       riskScore: risk,
-      aiInsights
+      aiInsights,
+      alerts,
+      depEdges
     };
 
   } catch (err) {
-    console.log("Analysis Error:", err.message);
+    console.log("❌ Analysis Error:", err.message);
     throw err;
   }
 };

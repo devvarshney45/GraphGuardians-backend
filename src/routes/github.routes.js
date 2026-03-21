@@ -12,6 +12,9 @@ import {
 import { githubWebhook } from "../controllers/webhook.controller.js";
 import { authMiddleware } from "../middleware/auth.middleware.js";
 
+// 🔥 NEW IMPORT
+import { getInstallationRepos } from "../controllers/github.install.controller.js";
+
 const router = express.Router();
 
 /* ================================
@@ -23,7 +26,12 @@ router.get("/branches", getBranches);
 router.get("/package", getPackageJson);
 
 /* ================================
-   🔔 GITHUB WEBHOOK (ONLY EVENTS)
+   📡 GET USER INSTALLATION REPOS 🔥
+================================ */
+router.get("/repos", authMiddleware, getInstallationRepos);
+
+/* ================================
+   🔔 GITHUB WEBHOOK (EVENTS ONLY)
 ================================ */
 router.post("/webhook", githubWebhook);
 
@@ -53,7 +61,7 @@ router.get("/install-url", authMiddleware, async (req, res) => {
 });
 
 /* ================================
-   🔥 INSTALL CALLBACK (MAIN LOGIC)
+   🔥 INSTALL CALLBACK (SAFE LINKING)
 ================================ */
 router.get("/install/callback", async (req, res) => {
   try {
@@ -81,19 +89,25 @@ router.get("/install/callback", async (req, res) => {
     console.log("👤 User ID:", userId);
     console.log("🆔 Installation ID:", installation_id);
 
-    // 💾 SAVE (IMPORTANT: don't manually set githubConnected)
     const user = await User.findById(userId);
 
     if (!user) {
+      console.log("❌ User not found");
       return res.status(404).send("User not found");
     }
 
+    // ✅ SAVE INSTALLATION
     user.installationId = Number(installation_id);
     await user.save();
 
-    console.log("✅ Installation linked to user");
+    console.log("✅ Installation linked to user:", user._id);
 
-    return res.redirect(`${process.env.FRONTEND_URL}/dashboard`);
+    /* =========================
+       🔁 REDIRECT FRONTEND
+    ========================= */
+    const FRONTEND = process.env.FRONTEND_URL || "http://localhost:5173";
+
+    return res.redirect(`${FRONTEND}/dashboard`);
 
   } catch (err) {
     console.log("❌ CALLBACK ERROR:", err.message);

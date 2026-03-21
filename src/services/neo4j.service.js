@@ -12,73 +12,72 @@ export const pushToNeo4j = async (
     console.log("🧠 Neo4j Sync Started");
 
     /* =========================
-       🧼 ULTRA SAFE CLEAN (CRITICAL 💀)
+       🔥 STRICT CLEAN (FINAL FIX 💀)
     ========================= */
-    const cleanDeps = JSON.parse(JSON.stringify(deps || []))
-      .filter(d => d?.name)
-      .map(d => ({
-        name: String(d.name).toLowerCase().trim(),
-        version: String(d.version || "unknown")
-      }));
 
-    const cleanEdges = JSON.parse(JSON.stringify(depEdges || []))
-      .filter(e => e?.from && e?.to)
-      .map(e => ({
-        from: String(e.from).toLowerCase().trim(),
-        to: String(e.to).toLowerCase().trim()
-      }));
+    const safeDeps = [];
+    for (const d of deps) {
+      if (d && typeof d.name === "string") {
+        safeDeps.push({
+          name: d.name.toLowerCase().trim(),
+          version: String(d.version || "unknown")
+        });
+      }
+    }
 
-    const cleanVulns = JSON.parse(JSON.stringify(vulns || []))
-      .filter(v => v?.package)
-      .map(v => ({
-        package: String(v.package).toLowerCase().trim(),
-        id: String(v.cve || `${v.package}_unknown`),
-        severity: String(v.severity || "UNKNOWN")
-      }));
+    const safeEdges = [];
+    for (const e of depEdges) {
+      if (e && typeof e.from === "string" && typeof e.to === "string") {
+        safeEdges.push({
+          from: e.from.toLowerCase().trim(),
+          to: e.to.toLowerCase().trim()
+        });
+      }
+    }
+
+    const safeVulns = [];
+    for (const v of vulns) {
+      if (v && typeof v.package === "string") {
+        safeVulns.push({
+          package: v.package.toLowerCase().trim(),
+          id: String(v.cve || `${v.package}_unknown`),
+          severity: String(v.severity || "UNKNOWN")
+        });
+      }
+    }
 
     /* =========================
-       🔥 ROOT DETECTION
+       ROOT
     ========================= */
     const ROOT =
-      cleanEdges.length > 0
-        ? cleanEdges[0].from
-        : cleanDeps[0]?.name || "root";
+      safeEdges.length > 0
+        ? safeEdges[0].from
+        : safeDeps[0]?.name || "root";
 
     /* =========================
-       🧹 CLEAN OLD GRAPH
+       CLEAN OLD GRAPH
     ========================= */
     await session.run(
-      `
-      MATCH (r:Repo {id: $repoId})-[*]->(n)
-      DETACH DELETE n
-      `,
+      `MATCH (r:Repo {id: $repoId})-[*]->(n) DETACH DELETE n`,
       { repoId }
     );
 
     /* =========================
-       ✅ CREATE REPO
+       CREATE REPO
     ========================= */
     await session.run(
-      `
-      MERGE (r:Repo {id: $repoId})
-      ON CREATE SET r.createdAt = timestamp()
-      `,
+      `MERGE (r:Repo {id: $repoId})`,
       { repoId }
     );
 
     /* =========================
-       ✅ ROOT NODE
+       ROOT NODE
     ========================= */
     await session.run(
-      `
-      MERGE (root:Package {name: $root})
-      `,
+      `MERGE (root:Package {name: $root})`,
       { root: ROOT }
     );
 
-    /* =========================
-       🔗 REPO → ROOT
-    ========================= */
     await session.run(
       `
       MATCH (r:Repo {id: $repoId})
@@ -89,53 +88,50 @@ export const pushToNeo4j = async (
     );
 
     /* =========================
-       📦 PACKAGES
+       PACKAGES
     ========================= */
-    if (cleanDeps.length > 0) {
+    for (const dep of safeDeps) {
       await session.run(
         `
-        UNWIND $deps AS dep
-        MERGE (p:Package {name: dep.name})
-        SET p.version = dep.version
+        MERGE (p:Package {name: $name})
+        SET p.version = $version
         `,
-        { deps: cleanDeps }
+        dep
       );
     }
 
     /* =========================
-       🔗 DEPENDENCY EDGES
+       EDGES
     ========================= */
-    if (cleanEdges.length > 0) {
+    for (const edge of safeEdges) {
       await session.run(
         `
-        UNWIND $edges AS edge
-        MATCH (a:Package {name: edge.from})
-        MATCH (b:Package {name: edge.to})
+        MATCH (a:Package {name: $from})
+        MATCH (b:Package {name: $to})
         MERGE (a)-[:DEPENDS_ON]->(b)
         `,
-        { edges: cleanEdges }
+        edge
       );
     }
 
-    console.log(`🔗 Dependency edges inserted: ${cleanEdges.length}`);
+    console.log(`🔗 Dependency edges inserted: ${safeEdges.length}`);
 
     /* =========================
-       🚨 VULNERABILITIES
+       VULNERABILITIES
     ========================= */
-    if (cleanVulns.length > 0) {
+    for (const v of safeVulns) {
       await session.run(
         `
-        UNWIND $vulns AS v
-        MATCH (p:Package {name: v.package})
-        MERGE (vul:Vulnerability {id: v.id})
-        SET vul.severity = v.severity
+        MATCH (p:Package {name: $package})
+        MERGE (vul:Vulnerability {id: $id})
+        SET vul.severity = $severity
         MERGE (p)-[:HAS_VULN]->(vul)
         `,
-        { vulns: cleanVulns }
+        v
       );
     }
 
-    console.log(`🚨 Vulnerabilities linked: ${cleanVulns.length}`);
+    console.log(`🚨 Vulnerabilities linked: ${safeVulns.length}`);
 
     console.log("✅ Neo4j Sync Success");
 

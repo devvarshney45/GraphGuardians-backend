@@ -1,40 +1,32 @@
 import admin from "firebase-admin";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 
 /* =========================
-   🔥 FIX __dirname (ESM)
+   🔥 INIT FIREBASE (ENV BASED)
 ========================= */
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+if (!admin.apps.length) {
+  try {
+    if (
+      process.env.FIREBASE_PROJECT_ID &&
+      process.env.FIREBASE_CLIENT_EMAIL &&
+      process.env.FIREBASE_PRIVATE_KEY
+    ) {
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
+        })
+      });
 
-/* =========================
-   🔥 LOAD FIREBASE JSON (FIXED 💀)
-========================= */
-let serviceAccount = null;
+      console.log("🔥 Firebase initialized (ENV)");
 
-try {
-  const filePath = path.join(__dirname, "../config/firebase.json");
+    } else {
+      console.log("❌ Firebase ENV variables missing");
+    }
 
-  const raw = fs.readFileSync(filePath, "utf-8");
-  serviceAccount = JSON.parse(raw);
-
-  console.log("🔥 Firebase JSON loaded");
-
-} catch (err) {
-  console.log("❌ Firebase JSON load failed:", err.message);
-}
-
-/* =========================
-   🔥 INIT FIREBASE
-========================= */
-if (!admin.apps.length && serviceAccount) {
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-  });
-
-  console.log("🔥 Firebase initialized");
+  } catch (err) {
+    console.log("❌ Firebase init error:", err.message);
+  }
 }
 
 /* =========================
@@ -55,16 +47,14 @@ export const sendNotification = async (tokens = [], title, body) => {
       tokens
     };
 
-    const response = await admin
-      .messaging()
-      .sendEachForMulticast(message);
+    const response = await admin.messaging().sendEachForMulticast(message);
 
     console.log("📲 Notification sent");
     console.log("✅ Success:", response.successCount);
     console.log("❌ Failed:", response.failureCount);
 
     /* =========================
-       🔥 REMOVE INVALID TOKENS
+       🔥 HANDLE FAILED TOKENS
     ========================= */
     if (response.failureCount > 0) {
       const failedTokens = [];

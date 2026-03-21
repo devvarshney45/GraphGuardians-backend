@@ -1,56 +1,82 @@
 export const extractDependencyEdges = (tree) => {
   const edges = [];
 
-  if (!tree || !tree.dependencies) return edges;
+  if (!tree || typeof tree !== "object") return edges;
 
-  // 🔥 normalize root
-  const root = (tree.name || "root").toLowerCase().trim();
+  const root = String(tree.name || "root")
+    .toLowerCase()
+    .trim();
 
-  const seen = new Set(); // ✅ avoid duplicates
+  const seen = new Set();
 
   const addEdge = (from, to) => {
-    const key = `${from}->${to}`;
+    if (!from || !to) return;
+
+    const f = String(from).toLowerCase().trim();
+    const t = String(to).toLowerCase().trim();
+
+    if (!f || !t || f === t) return;
+
+    const key = `${f}->${t}`;
 
     if (!seen.has(key)) {
       seen.add(key);
-
-      edges.push({
-        from,
-        to
-      });
+      edges.push({ from: f, to: t });
     }
   };
 
   const traverse = (node, parent) => {
-    if (!node || !node.dependencies) return;
+    // 🔥 SAFETY CHECK
+    if (
+      !node ||
+      typeof node !== "object" ||
+      !node.dependencies ||
+      typeof node.dependencies !== "object"
+    ) {
+      return;
+    }
 
-    for (const [name, dep] of Object.entries(node.dependencies)) {
+    for (const name in node.dependencies) {
+      const dep = node.dependencies[name];
+
+      // 🔥 STRICT VALIDATION
+      if (!name || typeof name !== "string") continue;
+
       const child = name.toLowerCase().trim();
 
-      // ❌ skip invalid/self
       if (!child || parent === child) continue;
 
-      // ✅ add edge
+      // ✅ edge add
       addEdge(parent, child);
 
-      // 🔁 recursive
-      traverse(dep, child);
+      // 🔥 RECURSE ONLY IF SAFE OBJECT
+      if (
+        dep &&
+        typeof dep === "object" &&
+        !Array.isArray(dep)
+      ) {
+        traverse(dep, child);
+      }
     }
   };
 
   /* =========================
-     🔥 ROOT → FIRST LEVEL FIX
+     ROOT → FIRST LEVEL
   ========================= */
-  for (const [name] of Object.entries(tree.dependencies)) {
-    const child = name.toLowerCase().trim();
+  if (tree.dependencies && typeof tree.dependencies === "object") {
+    for (const name in tree.dependencies) {
+      if (typeof name !== "string") continue;
 
-    if (child && child !== root) {
-      addEdge(root, child);
+      const child = name.toLowerCase().trim();
+
+      if (child && child !== root) {
+        addEdge(root, child);
+      }
     }
   }
 
   /* =========================
-     🔁 FULL TREE TRAVERSE
+     FULL TRAVERSE
   ========================= */
   traverse(tree, root);
 

@@ -1,5 +1,6 @@
 import Repo from "../models/repo.model.js";
-import { runAnalysis } from "../services/analysis.service.js"; // ✅ FIXED
+import User from "../models/user.model.js"; // ✅ NEW
+import { runAnalysis } from "../services/analysis.service.js";
 import { getInstallationToken } from "../services/githubApp.service.js";
 
 export const githubWebhook = async (req, res) => {
@@ -9,6 +10,40 @@ export const githubWebhook = async (req, res) => {
     console.log("\n📡 ===============================");
     console.log("📡 GitHub Event:", event);
     console.log("==================================");
+
+    /* =========================
+       🔥 INSTALL EVENT (MAIN FIX)
+    ========================= */
+    if (event === "installation") {
+      const installationId = req.body.installation?.id;
+      const accountLogin = req.body.installation?.account?.login;
+
+      console.log("📦 INSTALL EVENT:");
+      console.log("🆔 Installation ID:", installationId);
+      console.log("👤 Account:", accountLogin);
+
+      if (!installationId || !accountLogin) {
+        console.log("❌ Missing installation data");
+        return res.sendStatus(200);
+      }
+
+      // 🔍 find user by github username
+      const user = await User.findOne({
+        githubUsername: accountLogin
+      });
+
+      if (!user) {
+        console.log("❌ User not found for:", accountLogin);
+        return res.sendStatus(200);
+      }
+
+      // 💾 SAVE installationId
+      user.installationId = Number(installationId);
+      user.githubConnected = true;
+      await user.save();
+
+      console.log("✅ Installation saved for user:", user._id);
+    }
 
     /* =========================
        🚀 PUSH EVENT
@@ -66,12 +101,12 @@ export const githubWebhook = async (req, res) => {
       }
 
       /* =========================
-         🔥 RUN ANALYSIS (FINAL FIX)
+         🔥 RUN ANALYSIS
       ========================= */
       try {
         console.log("🚀 Starting full analysis...");
 
-        await runAnalysis(repoUrl, repo._id, token); // ✅ SERVICE CALL
+        await runAnalysis(repoUrl, repo._id, token);
 
         console.log("✅ Full analysis completed");
 

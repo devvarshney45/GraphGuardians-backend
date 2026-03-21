@@ -14,7 +14,10 @@ export const githubWebhook = async (req, res) => {
        🚀 PUSH EVENT
     ========================= */
     if (event === "push") {
-      const repoUrl = req.body.repository.html_url.replace(".git", "").trim();
+      const repoUrl = req.body.repository.html_url
+        .replace(".git", "")
+        .trim();
+
       const installationId = req.body.installation?.id;
 
       console.log("🚀 Push detected on:", repoUrl);
@@ -24,6 +27,9 @@ export const githubWebhook = async (req, res) => {
         return res.sendStatus(200);
       }
 
+      /* =========================
+         🔍 FIND REPO
+      ========================= */
       const repo = await Repo.findOne({ url: repoUrl });
 
       if (!repo) {
@@ -31,16 +37,25 @@ export const githubWebhook = async (req, res) => {
         return res.sendStatus(200);
       }
 
-      // 🛑 duplicate protection
+      /* =========================
+         🛑 DUPLICATE PROTECTION
+      ========================= */
       if (repo.lastScanned) {
         const diff = Date.now() - new Date(repo.lastScanned).getTime();
+
         if (diff < 10000) {
-          console.log("⚠️ Skipping duplicate scan");
+          console.log("⚠️ Skipping duplicate scan (within 10s)");
           return res.sendStatus(200);
         }
       }
 
+      console.log("📦 Repo:", repo.name);
+
+      /* =========================
+         🔐 GET INSTALLATION TOKEN
+      ========================= */
       let token;
+
       try {
         token = await getInstallationToken(installationId);
         console.log("🔐 Installation token generated");
@@ -50,25 +65,31 @@ export const githubWebhook = async (req, res) => {
       }
 
       /* =========================
-         🔥 ASYNC TRIGGER (NON-BLOCKING)
+         🔥 RUN ANALYSIS (FIXED 💀)
       ========================= */
-      analyzeRepo(
-        {
-          body: {
-            url: repoUrl,
-            repoId: repo._id,
-            token
+      try {
+        await analyzeRepo(
+          {
+            body: {
+              url: repoUrl,
+              repoId: repo._id,
+              token
+            },
+            user: { id: repo.userId }
           },
-          user: { id: repo.userId }
-        },
-        { status: () => ({ json: () => {} }) }
-      ).catch(err => {
-        console.log("❌ Background analyze failed:", err.message);
-      });
+          { status: () => ({ json: () => {} }) }
+        );
 
-      console.log("🚀 Background scan triggered");
+        console.log("✅ Auto scan completed via webhook");
+
+      } catch (err) {
+        console.log("❌ Analyze failed:", err.message);
+      }
     }
 
+    /* =========================
+       DEFAULT RESPONSE
+    ========================= */
     res.sendStatus(200);
 
   } catch (err) {

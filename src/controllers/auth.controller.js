@@ -2,6 +2,7 @@ import User from "../models/user.model.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import axios from "axios";
+
 /* =========================
    🔐 JWT GENERATOR
 ========================= */
@@ -48,11 +49,7 @@ export const register = async (req, res) => {
     res.status(201).json({
       msg: "User registered successfully",
       token,
-      user: {
-        id: user._id,
-        name,
-        email
-      }
+      user: user.toSafeObject() // 🔥 FIXED
     });
 
   } catch (err) {
@@ -95,12 +92,7 @@ export const login = async (req, res) => {
     res.json({
       msg: "Login successful",
       token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        avatar: user.avatar
-      }
+      user: user.toSafeObject() // 🔥 FIXED
     });
 
   } catch (err) {
@@ -166,6 +158,8 @@ export const githubCallback = async (req, res) => {
       });
     } else {
       user.githubAccessToken = accessToken;
+      user.githubUsername = githubUser.login;
+      user.avatar = githubUser.avatar_url;
       await user.save();
     }
 
@@ -204,12 +198,10 @@ export const saveDeviceToken = async (req, res) => {
       });
     }
 
-    // ensure array
     if (!user.fcmTokens) {
       user.fcmTokens = [];
     }
 
-    // avoid duplicate
     if (!user.fcmTokens.includes(token)) {
       user.fcmTokens.push(token);
       await user.save();
@@ -228,42 +220,37 @@ export const saveDeviceToken = async (req, res) => {
 };
 
 /* =========================
-   👤 PROFILE
+   👤 PROFILE (LEGACY)
 ========================= */
 export const getProfile = async (req, res) => {
-  res.json({
-    user: req.user
-  });
-};
-
-
-
-// controllers/auth.controller.js
-
-
-export const getMe = async (req, res) => {
   try {
-    const userId = req.user.id; // JWT middleware se
-
-    const user = await User.findById(userId).select(
-      "_id name email installationId"
-    );
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
+    const user = await User.findById(req.user.id);
 
     res.json({
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        installationId: user.installationId || null,
-        githubConnected: !!user.installationId
-      }
+      user: user.toSafeObject()
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/* =========================
+   🔥 GET ME (FINAL FIXED)
+========================= */
+export const getMe = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({ msg: "User not found" });
+    }
+
+    return res.json({
+      user: user.toSafeObject() // 🔥 single source of truth
     });
 
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.log("❌ getMe error:", err.message);
+    res.status(500).json({ error: err.message });
   }
 };

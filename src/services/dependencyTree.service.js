@@ -3,27 +3,46 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 
-export const getDependencyTree = (repoUrl) => {
+/**
+ * 🔥 Clone repo + get dependency tree (PRODUCTION READY)
+ */
+export const getDependencyTree = async (repoUrl, token = null) => {
   let tempDir = null;
 
   try {
     console.log("📦 Preparing repo for dependency tree...");
 
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "repo-"));
-
     console.log("📁 Temp dir:", tempDir);
 
     /* =========================
-       ⬇️ CLONE REPO
+       🔐 BUILD CLONE URL (FIXED)
     ========================= */
-    execSync(`git clone ${repoUrl} ${tempDir}`, {
-      stdio: "ignore"
-    });
+    let cloneUrl = repoUrl.replace(".git", "").trim();
 
-    console.log("⬇️ Repo cloned");
+    // 👉 private repo support
+    if (token) {
+      cloneUrl = cloneUrl.replace(
+        "https://",
+        `https://${token}@`
+      );
+    }
 
     /* =========================
-       🔥 TRY INSTALL (SAFE MODE)
+       ⬇️ CLONE REPO (WITH RETRY)
+    ========================= */
+    try {
+      execSync(`git clone ${cloneUrl} ${tempDir}`, {
+        stdio: "ignore"
+      });
+      console.log("⬇️ Repo cloned");
+    } catch (err) {
+      console.log("❌ Clone failed:", err.message);
+      return null;
+    }
+
+    /* =========================
+       📦 INSTALL DEPENDENCIES (SAFE)
     ========================= */
     try {
       execSync("npm install --legacy-peer-deps --no-audit --no-fund", {
@@ -32,11 +51,11 @@ export const getDependencyTree = (repoUrl) => {
       });
       console.log("📦 npm install success");
     } catch (err) {
-      console.log("⚠️ npm install failed, trying fallback...");
+      console.log("⚠️ npm install failed, continuing...");
     }
 
     /* =========================
-       🔥 FORCE TREE (IMPORTANT)
+       🌳 GET DEP TREE (FORCE)
     ========================= */
     let output;
 
@@ -47,10 +66,13 @@ export const getDependencyTree = (repoUrl) => {
       });
     } catch (err) {
       console.log("⚠️ npm ls error but continuing...");
-      output = err.stdout; // ✅ EVEN ON ERROR TAKE OUTPUT
+      output = err.stdout;
     }
 
-    if (!output) return null;
+    if (!output) {
+      console.log("❌ No dependency output");
+      return null;
+    }
 
     console.log("🌳 Dependency tree generated");
 
@@ -61,6 +83,9 @@ export const getDependencyTree = (repoUrl) => {
     return null;
 
   } finally {
+    /* =========================
+       🧹 CLEANUP
+    ========================= */
     if (tempDir && fs.existsSync(tempDir)) {
       fs.rmSync(tempDir, { recursive: true, force: true });
       console.log("🧹 Temp repo deleted");

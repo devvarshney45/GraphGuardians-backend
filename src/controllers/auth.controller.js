@@ -49,7 +49,7 @@ export const register = async (req, res) => {
     res.status(201).json({
       msg: "User registered successfully",
       token,
-      user: user.toSafeObject() // 🔥 FIXED
+      user: user.toSafeObject()
     });
 
   } catch (err) {
@@ -92,7 +92,7 @@ export const login = async (req, res) => {
     res.json({
       msg: "Login successful",
       token,
-      user: user.toSafeObject() // 🔥 FIXED
+      user: user.toSafeObject()
     });
 
   } catch (err) {
@@ -121,7 +121,9 @@ export const githubCallback = async (req, res) => {
       return res.status(400).json({ msg: "No code provided" });
     }
 
-    // 🔑 access token
+    /* =========================
+       🔑 GET ACCESS TOKEN
+    ========================= */
     const tokenRes = await axios.post(
       "https://github.com/login/oauth/access_token",
       {
@@ -136,7 +138,9 @@ export const githubCallback = async (req, res) => {
 
     const accessToken = tokenRes.data.access_token;
 
-    // 👤 user data
+    /* =========================
+       👤 GET USER DATA
+    ========================= */
     const userRes = await axios.get("https://api.github.com/user", {
       headers: {
         Authorization: `token ${accessToken}`
@@ -145,20 +149,31 @@ export const githubCallback = async (req, res) => {
 
     const githubUser = userRes.data;
 
+    // 🔥 normalize username (important)
+    const githubUsername = githubUser.login.toLowerCase();
+
     let user = await User.findOne({ githubId: githubUser.id });
 
+    /* =========================
+       🆕 CREATE USER
+    ========================= */
     if (!user) {
       user = await User.create({
         name: githubUser.name || githubUser.login,
-        email: githubUser.email || `${githubUser.login}@github.com`,
+        email: githubUser.email || `${githubUsername}@github.com`,
         githubId: githubUser.id,
-        githubUsername: githubUser.login,
+        githubUsername, // 🔥 FIXED
         githubAccessToken: accessToken,
         avatar: githubUser.avatar_url
       });
-    } else {
+    }
+
+    /* =========================
+       🔄 UPDATE EXISTING USER
+    ========================= */
+    else {
       user.githubAccessToken = accessToken;
-      user.githubUsername = githubUser.login;
+      user.githubUsername = githubUsername; // 🔥 FIXED
       user.avatar = githubUser.avatar_url;
       await user.save();
     }
@@ -178,7 +193,7 @@ export const githubCallback = async (req, res) => {
 };
 
 /* =========================
-   🔔 SAVE DEVICE TOKEN (FCM)
+   🔔 SAVE DEVICE TOKEN
 ========================= */
 export const saveDeviceToken = async (req, res) => {
   try {
@@ -220,22 +235,7 @@ export const saveDeviceToken = async (req, res) => {
 };
 
 /* =========================
-   👤 PROFILE (LEGACY)
-========================= */
-export const getProfile = async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id);
-
-    res.json({
-      user: user.toSafeObject()
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
-
-/* =========================
-   🔥 GET ME (FINAL FIXED)
+   🔥 GET ME
 ========================= */
 export const getMe = async (req, res) => {
   try {
@@ -246,7 +246,7 @@ export const getMe = async (req, res) => {
     }
 
     return res.json({
-      user: user.toSafeObject() // 🔥 single source of truth
+      user: user.toSafeObject()
     });
 
   } catch (err) {

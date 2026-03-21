@@ -66,7 +66,6 @@ export const analyzeRepo = async (req, res) => {
        FETCH package.json
     ========================= */
     const pkg = await fetchPackageJson(url, token);
-
     if (!pkg) {
       return response.status(400).json({
         msg: "package.json not accessible"
@@ -84,7 +83,7 @@ export const analyzeRepo = async (req, res) => {
     const uniqueDeps = [];
 
     for (const d of rawDeps) {
-      if (!d.name) continue;
+      if (!d?.name || typeof d.name !== "string") continue;
 
       const cleanName = d.name.toLowerCase().trim();
       const key = `${cleanName}_${newVersion}`;
@@ -96,7 +95,7 @@ export const analyzeRepo = async (req, res) => {
           repoId,
           versionGroup: newVersion,
           name: cleanName,
-          version: d.version || "unknown",
+          version: String(d.version || "unknown"),
           cleanVersion: d.cleanVersion || "",
           type: d.type || "prod"
         });
@@ -109,11 +108,6 @@ export const analyzeRepo = async (req, res) => {
        COMPARE CHANGES
     ========================= */
     const depChanges = compareDependencies(oldDeps, uniqueDeps);
-
-    console.log("🔄 Changes:");
-    console.log(`➕ Added: ${depChanges.added.length}`);
-    console.log(`❌ Removed: ${depChanges.removed.length}`);
-    console.log(`♻️ Updated: ${depChanges.updated.length}`);
 
     /* =========================
        SAVE DEPENDENCIES
@@ -130,9 +124,9 @@ export const analyzeRepo = async (req, res) => {
     const formattedVulns = vulns.map(v => ({
       repoId,
       versionGroup: newVersion,
-      package: v.package?.toLowerCase().trim(),
-      version: v.version,
-      severity: v.severity || "unknown",
+      package: String(v.package || "").toLowerCase().trim(),
+      version: String(v.version || ""),
+      severity: String(v.severity || "unknown"),
       description: v.description,
       cve: v.cve,
       fix: v.fix
@@ -147,17 +141,13 @@ export const analyzeRepo = async (req, res) => {
     /* =========================
        ALERTS
     ========================= */
-    const newVulns = findNewVulnerabilities(oldVulns, formattedVulns);
-    const fixedVulns = findFixedVulnerabilities(oldVulns, formattedVulns);
+    const alerts = generateAlerts(
+      repoId,
+      findNewVulnerabilities(oldVulns, formattedVulns),
+      findFixedVulnerabilities(oldVulns, formattedVulns)
+    );
 
-    const alerts = generateAlerts(repoId, newVulns, fixedVulns);
-
-    if (alerts.length > 0) {
-      await Alert.insertMany(alerts);
-      console.log(`🔔 Alerts: ${alerts.length}`);
-    } else {
-      console.log("✅ No new alerts");
-    }
+    if (alerts.length > 0) await Alert.insertMany(alerts);
 
     /* =========================
        GRAPH + RISK
@@ -165,22 +155,10 @@ export const analyzeRepo = async (req, res) => {
     const graph = buildGraph(uniqueDeps, formattedVulns, repoId);
     const risk = calculateRisk(formattedVulns);
 
-    console.log(`⚠️ Risk Score: ${risk}`);
-
     /* =========================
-       AI (SAFE)
+       🔥 DEPENDENCY TREE (FINAL FIX 💀)
     ========================= */
-    let aiInsights = [];
-    try {
-      aiInsights = await generateAIInsights(formattedVulns);
-    } catch (err) {
-      console.log("⚠️ AI failed:", err.message);
-    }
-
-    /* =========================
-       🔥 DEPENDENCY TREE
-    ========================= */
-    let depEdges = [];
+    let cleanEdges = [];
 
     try {
       console.log("🌳 Generating dependency tree...");
@@ -188,51 +166,51 @@ export const analyzeRepo = async (req, res) => {
       const tree = await getDependencyTree(url, token);
 
       if (tree) {
-        depEdges = extractDependencyEdges(tree);
+        const rawEdges = extractDependencyEdges(tree);
+
+        cleanEdges = rawEdges
+          .filter(e =>
+            e &&
+            typeof e.from === "string" &&
+            typeof e.to === "string"
+          )
+          .map(e => ({
+            from: e.from.toLowerCase().trim(),
+            to: e.to.toLowerCase().trim()
+          }));
       }
 
     } catch (err) {
       console.log("⚠️ Tree parsing failed:", err.message);
     }
 
-    console.log(`🔗 Dependency edges: ${depEdges.length}`);
+    console.log(`🔗 Clean edges: ${cleanEdges.length}`);
 
     /* =========================
-       🔥 SANITIZE DATA (CRITICAL 💀)
+       🔥 CLEAN DATA (FINAL 💀)
     ========================= */
-    const cleanEdges = depEdges.map(e => ({
-      from: String(e.from || e.source || ""),
-      to: String(e.to || e.target || "")
-    }));
-
     const cleanDeps = uniqueDeps.map(d => ({
-      name: String(d.name),
-      version: String(d.version),
-      type: String(d.type)
+      name: d.name,
+      version: d.version
     }));
 
     const cleanVulns = formattedVulns.map(v => ({
-      package: String(v.package),
-      severity: String(v.severity),
-      version: String(v.version || ""),
-      cve: v.cve ? String(v.cve) : null,
-      fix: v.fix ? String(v.fix) : ""
+      package: v.package,
+      id: v.cve || `${v.package}_unknown`,
+      severity: v.severity
     }));
 
     /* =========================
        🔥 NEO4J SYNC
     ========================= */
-    try {
-      await pushToNeo4j(
-        repoId,
-        cleanDeps,
-        cleanVulns,
-        cleanEdges
-      );
-      console.log("🧠 Neo4j Sync Done ✅");
-    } catch (err) {
-      console.log("❌ Neo4j Error:", err.message);
-    }
+    await pushToNeo4j(
+      repoId,
+      cleanDeps,
+      cleanVulns,
+      cleanEdges
+    );
+
+    console.log("🧠 Neo4j Sync Done ✅");
 
     /* =========================
        SCAN HISTORY
@@ -266,18 +244,13 @@ export const analyzeRepo = async (req, res) => {
 
     return response.json({
       version: newVersion,
-      scanCount: updatedRepo.scanCount,
       repo: updatedRepo,
       stats: {
         riskScore: risk,
         dependencies: uniqueDeps.length,
         vulnerabilities: formattedVulns.length
       },
-      changes: depChanges,
-      dependencies: uniqueDeps,
-      vulnerabilities: formattedVulns,
       graph,
-      aiInsights,
       alerts
     });
 
@@ -285,9 +258,7 @@ export const analyzeRepo = async (req, res) => {
     console.log("❌ Analyze Error:", err.message);
 
     if (res?.status) {
-      return res.status(500).json({
-        error: err.message
-      });
+      return res.status(500).json({ error: err.message });
     }
   }
 };

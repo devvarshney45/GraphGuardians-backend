@@ -10,7 +10,7 @@ import {
 } from "../controllers/github.controller.js";
 
 import { githubWebhook } from "../controllers/webhook.controller.js";
-import { authMiddleware } from "../middleware/auth.middleware.js"; // ✅ IMPORTANT
+import { authMiddleware } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
@@ -23,18 +23,17 @@ router.get("/branches", getBranches);
 router.get("/package", getPackageJson);
 
 /* ================================
-   🔔 GITHUB WEBHOOK (AUTO TRIGGER)
+   🔔 GITHUB WEBHOOK (ONLY EVENTS)
 ================================ */
 router.post("/webhook", githubWebhook);
 
 /* ================================
-   🔗 GET INSTALL URL (SECURE 🔥)
+   🔗 GET INSTALL URL (SECURE)
 ================================ */
 router.get("/install-url", authMiddleware, async (req, res) => {
   try {
-    const userId = req.user.id; // ✅ now guaranteed
+    const userId = req.user.id;
 
-    // 🔐 short-lived state token
     const state = jwt.sign(
       { id: userId },
       process.env.JWT_SECRET,
@@ -54,7 +53,7 @@ router.get("/install-url", authMiddleware, async (req, res) => {
 });
 
 /* ================================
-   🔥 INSTALL CALLBACK (FINAL FIX)
+   🔥 INSTALL CALLBACK (MAIN LOGIC)
 ================================ */
 router.get("/install/callback", async (req, res) => {
   try {
@@ -65,23 +64,16 @@ router.get("/install/callback", async (req, res) => {
     console.log("Query:", req.query);
     console.log("==================================");
 
-    /* =========================
-       ❌ VALIDATION
-    ========================= */
     if (!installation_id || !state) {
-      console.log("❌ Missing params");
       return res.status(400).send("Missing installation_id or state");
     }
 
-    /* =========================
-       🔐 VERIFY STATE
-    ========================= */
     let decoded;
     try {
       decoded = jwt.verify(state, process.env.JWT_SECRET);
     } catch (err) {
-      console.log("❌ Invalid or expired state token");
-      return res.status(401).send("Invalid or expired state");
+      console.log("❌ Invalid state");
+      return res.status(401).send("Invalid state");
     }
 
     const userId = decoded.id;
@@ -89,32 +81,22 @@ router.get("/install/callback", async (req, res) => {
     console.log("👤 User ID:", userId);
     console.log("🆔 Installation ID:", installation_id);
 
-    /* =========================
-       💾 SAVE IN DB
-    ========================= */
-    const updatedUser = await User.findByIdAndUpdate(
-      userId,
-      {
-        installationId: Number(installation_id),
-        githubConnected: true
-      },
-      { new: true }
-    );
+    // 💾 SAVE (IMPORTANT: don't manually set githubConnected)
+    const user = await User.findById(userId);
 
-    if (!updatedUser) {
-      console.log("❌ User not found");
+    if (!user) {
       return res.status(404).send("User not found");
     }
 
-    console.log("✅ Installation saved successfully");
+    user.installationId = Number(installation_id);
+    await user.save();
 
-    /* =========================
-       🔁 REDIRECT FRONTEND
-    ========================= */
+    console.log("✅ Installation linked to user");
+
     return res.redirect(`${process.env.FRONTEND_URL}/dashboard`);
 
   } catch (err) {
-    console.log("❌ INSTALL CALLBACK ERROR:", err.message);
+    console.log("❌ CALLBACK ERROR:", err.message);
     return res.status(500).send("Internal Server Error");
   }
 });

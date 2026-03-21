@@ -13,16 +13,24 @@ export const getDependencyTree = async (repoUrl, token = null) => {
     console.log("📁 Temp dir:", tempDir);
 
     /* =========================
-       🔐 BUILD CLONE URL (FIXED 💀)
+       🔐 BUILD CLONE URL (FINAL FIX 🔥)
     ========================= */
-    let cloneUrl = repoUrl.replace(".git", "").trim();
+    let cloneUrl = repoUrl.trim();
 
+    // ✅ ensure .git present
+    if (!cloneUrl.endsWith(".git")) {
+      cloneUrl += ".git";
+    }
+
+    // ✅ inject token for private repo
     if (token) {
       cloneUrl = cloneUrl.replace(
         "https://",
         `https://x-access-token:${token}@`
       );
     }
+
+    console.log("🔗 Clone URL (safe)");
 
     /* =========================
        ⬇️ CLONE REPO

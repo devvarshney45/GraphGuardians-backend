@@ -38,12 +38,13 @@ const userSchema = new mongoose.Schema(
     },
 
     githubUsername: {
-      type: String
+      type: String,
+      default: ""
     },
 
     githubAccessToken: {
       type: String,
-      select: false // 🔐 never send to frontend
+      select: false // 🔐 never expose
     },
 
     /* =========================
@@ -79,37 +80,46 @@ const userSchema = new mongoose.Schema(
 );
 
 /* =========================
-   ⚡ INDEXES (FIXED)
+   ⚡ INDEXES (CLEAN)
 ========================= */
 
-// ❌ duplicate avoid kiya
-// email already unique hai, dubara index nahi chahiye
-
+// email already unique → no duplicate index
 userSchema.index({ githubId: 1 });
 
 /* =========================
-   🔥 VIRTUAL FIELD
+   🔥 VIRTUALS
 ========================= */
 
-// frontend ke liye
+// GitHub connected status
 userSchema.virtual("githubConnected").get(function () {
-  return !!this.installationId;
+  return !!(this.installationId || this.githubId);
 });
 
 /* =========================
-   🔥 SAFE RESPONSE
+   🔐 SAFE RESPONSE (IMPORTANT)
 ========================= */
 
-// jo frontend ko bhejna hai
 userSchema.methods.toSafeObject = function () {
   return {
     id: this._id,
-    name: this.name,
-    email: this.email,
-    avatar: this.avatar,
-    installationId: this.installationId,
-    githubConnected: !!this.installationId
+    name: this.name || "",
+    email: this.email || "",
+    avatar: this.avatar || "",
+
+    // 🔥 GitHub fields (frontend required)
+    installationId: this.installationId || null,
+    githubConnected: !!(this.installationId || this.githubId)
   };
+};
+
+/* =========================
+   🔄 STATIC HELPER (OPTIONAL)
+========================= */
+
+// cleaner fetch for controllers
+userSchema.statics.getSafeById = async function (id) {
+  const user = await this.findById(id);
+  return user ? user.toSafeObject() : null;
 };
 
 export default mongoose.model("User", userSchema);

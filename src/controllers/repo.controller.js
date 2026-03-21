@@ -28,18 +28,16 @@ const parseRepo = (url) => {
 };
 
 /* =========================
-   🔐 GET HEADERS (SMART TOKEN)
+   🔐 GET HEADERS
 ========================= */
 
 const getHeaders = (token) => {
-  const finalToken = token || process.env.GITHUB_TOKEN;
-
   const headers = {
     Accept: "application/vnd.github+json"
   };
 
-  if (finalToken) {
-    headers.Authorization = `token ${finalToken}`;
+  if (token) {
+    headers.Authorization = `token ${token}`;
   }
 
   return headers;
@@ -82,13 +80,14 @@ const createWebhook = async (owner, repo, token) => {
 };
 
 /* =========================
-   ➕ ADD REPO (PRO FLOW 🔥)
+   ➕ ADD REPO (FINAL FIXED)
 ========================= */
 
 export const addRepo = async (req, res) => {
   try {
     const { url } = req.body;
-    const userId = req.user?.id;
+    const user = req.user;
+    const userId = user?.id;
 
     if (!url) {
       return res.status(400).json({ msg: "Repo URL required" });
@@ -97,25 +96,22 @@ export const addRepo = async (req, res) => {
     const { owner, repo, cleanUrl } = parseRepo(url);
 
     /* =========================
-       🔥 GET USER (TOKEN SOURCE)
+       🔐 GET TOKEN
     ========================= */
-    const user = req.user;
-
     let token = null;
 
-    // 🔥 Priority:
-    // 1. GitHub App installation token
-    // 2. OAuth token
-    // 3. ENV fallback
-
     if (user.installationId) {
-      token = await getInstallationToken(user.installationId);
-      console.log("🔐 Using GitHub App token");
-    } else if (user.githubAccessToken) {
+      try {
+        token = await getInstallationToken(user.installationId);
+        console.log("🔐 Using App token");
+      } catch (err) {
+        console.log("❌ App token failed, fallback OAuth");
+      }
+    }
+
+    if (!token && user.githubAccessToken) {
       token = user.githubAccessToken;
       console.log("🔐 Using OAuth token");
-    } else {
-      console.log("⚠️ Using fallback token");
     }
 
     /* =========================
@@ -135,7 +131,7 @@ export const addRepo = async (req, res) => {
       console.log("❌ GitHub API error:", err.response?.data || err.message);
 
       return res.status(404).json({
-        msg: "Repository not found or private (install GitHub App)"
+        msg: "Repository not found or access denied"
       });
     }
 
@@ -161,8 +157,6 @@ export const addRepo = async (req, res) => {
       stars: repoData.stargazers_count,
       forks: repoData.forks_count,
       language: repoData.language,
-
-      // 🔥 no need to store user token anymore
       riskScore: 0,
       status: "scanning"
     });
@@ -170,12 +164,12 @@ export const addRepo = async (req, res) => {
     console.log(`📦 Repo added: ${repoData.full_name}`);
 
     /* =========================
-       🔥 CREATE WEBHOOK
+       🔗 WEBHOOK
     ========================= */
     await createWebhook(owner, repo, token);
 
     /* =========================
-       🔥 AUTO FIRST SCAN
+       🚀 AUTO SCAN
     ========================= */
     try {
       await analyzeRepo(
@@ -190,7 +184,7 @@ export const addRepo = async (req, res) => {
         { json: () => {} }
       );
 
-      console.log("✅ Auto first scan completed");
+      console.log("✅ Auto scan done");
 
     } catch (err) {
       console.log("❌ Auto scan failed:", err.message);
@@ -200,9 +194,12 @@ export const addRepo = async (req, res) => {
       });
     }
 
+    /* =========================
+       🔥 FINAL RESPONSE (IMPORTANT)
+    ========================= */
     res.status(201).json({
-      msg: "Repo added & auto scanned successfully 🚀",
-      repo: newRepo
+      msg: "Repo added successfully 🚀",
+      repo: newRepo   // 🔥 THIS FIXES YOUR FRONTEND
     });
 
   } catch (err) {

@@ -10,7 +10,7 @@ import {
 } from "../controllers/github.controller.js";
 
 import { githubWebhook } from "../controllers/webhook.controller.js";
-import { protect } from "../middleware/auth.middleware.js"; // ✅ IMPORTANT
+import { authMiddleware } from "../middleware/auth.middleware.js"; // ✅ IMPORTANT
 
 const router = express.Router();
 
@@ -30,7 +30,7 @@ router.post("/webhook", githubWebhook);
 /* ================================
    🔗 GET INSTALL URL (SECURE 🔥)
 ================================ */
-router.get("/install-url", protect, async (req, res) => {
+router.get("/install-url", authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id; // ✅ now guaranteed
 

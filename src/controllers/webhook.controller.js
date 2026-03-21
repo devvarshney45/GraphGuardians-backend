@@ -1,5 +1,5 @@
 import Repo from "../models/repo.model.js";
-import { analyzeRepo } from "./analysis.controller.js";
+import { runAnalysis } from "../services/analysis.service.js"; // ✅ FIXED
 import { getInstallationToken } from "../services/githubApp.service.js";
 
 export const githubWebhook = async (req, res) => {
@@ -50,6 +50,7 @@ export const githubWebhook = async (req, res) => {
       }
 
       console.log("📦 Repo:", repo.name);
+      console.log("🆔 Repo ID:", repo._id);
 
       /* =========================
          🔐 GET INSTALLATION TOKEN
@@ -65,25 +66,17 @@ export const githubWebhook = async (req, res) => {
       }
 
       /* =========================
-         🔥 RUN ANALYSIS (FIXED 💀)
+         🔥 RUN ANALYSIS (FINAL FIX)
       ========================= */
       try {
-        await analyzeRepo(
-          {
-            body: {
-              url: repoUrl,
-              repoId: repo._id,
-              token
-            },
-            user: { id: repo.userId }
-          },
-          { status: () => ({ json: () => {} }) }
-        );
+        console.log("🚀 Starting full analysis...");
 
-        console.log("✅ Auto scan completed via webhook");
+        await runAnalysis(repoUrl, repo._id, token); // ✅ SERVICE CALL
+
+        console.log("✅ Full analysis completed");
 
       } catch (err) {
-        console.log("❌ Analyze failed:", err.message);
+        console.log("❌ Analysis failed:", err.message);
       }
     }
 

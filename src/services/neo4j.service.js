@@ -12,23 +12,23 @@ export const pushToNeo4j = async (
     console.log("🧠 Neo4j Sync Started");
 
     /* =========================
-       🧼 NORMALIZE + SAFE DATA
+       🧼 ULTRA SAFE CLEAN (CRITICAL 💀)
     ========================= */
-    const cleanDeps = deps
+    const cleanDeps = JSON.parse(JSON.stringify(deps || []))
       .filter(d => d?.name)
       .map(d => ({
         name: String(d.name).toLowerCase().trim(),
         version: String(d.version || "unknown")
       }));
 
-    const cleanEdges = depEdges
+    const cleanEdges = JSON.parse(JSON.stringify(depEdges || []))
       .filter(e => e?.from && e?.to)
       .map(e => ({
         from: String(e.from).toLowerCase().trim(),
         to: String(e.to).toLowerCase().trim()
       }));
 
-    const cleanVulns = vulns
+    const cleanVulns = JSON.parse(JSON.stringify(vulns || []))
       .filter(v => v?.package)
       .map(v => ({
         package: String(v.package).toLowerCase().trim(),
@@ -37,7 +37,7 @@ export const pushToNeo4j = async (
       }));
 
     /* =========================
-       🔥 ROOT DETECTION (FIXED)
+       🔥 ROOT DETECTION
     ========================= */
     const ROOT =
       cleanEdges.length > 0
@@ -45,7 +45,7 @@ export const pushToNeo4j = async (
         : cleanDeps[0]?.name || "root";
 
     /* =========================
-       🧹 CLEAN OLD GRAPH (OPTIONAL BUT BEST)
+       🧹 CLEAN OLD GRAPH
     ========================= */
     await session.run(
       `
@@ -89,7 +89,7 @@ export const pushToNeo4j = async (
     );
 
     /* =========================
-       📦 CREATE PACKAGES
+       📦 PACKAGES
     ========================= */
     if (cleanDeps.length > 0) {
       await session.run(

@@ -130,7 +130,7 @@ export const analyzeRepo = async (req, res) => {
     console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
 
     /* =========================
-       🔔 ALERTS + FIREBASE DEBUG
+       🔔 ALERTS + FIREBASE (FINAL FIX 💀)
     ========================= */
     const alerts = generateAlerts(
       repoIdStr,
@@ -145,21 +145,24 @@ export const analyzeRepo = async (req, res) => {
       try {
         const user = await User.findById(repo.userId);
 
-        console.log("👤 USER ID:", user?._id);
-        console.log("📱 TOKENS:", user?.deviceTokens);
-
-        const tokens = user?.deviceTokens || [];
-
-        if (!tokens.length) {
-          console.log("⚠️ No tokens found → notification skipped");
+        if (!user) {
+          console.log("❌ User not found");
         } else {
-          console.log("🚀 Sending notification...");
+          const tokens = user.fcmTokens || []; // ✅ FIXED
 
-          await sendNotification(
-            tokens,
-            "🚨 Security Alert",
-            `${alerts.length} new vulnerabilities detected`
-          );
+          console.log("📱 FCM TOKENS:", tokens);
+
+          if (!tokens.length) {
+            console.log("⚠️ No FCM tokens → notification skipped");
+          } else {
+            console.log("🚀 Sending Firebase notification...");
+
+            await sendNotification(
+              tokens,
+              "🚨 Security Alert",
+              `${alerts.length} new vulnerabilities detected`
+            );
+          }
         }
 
       } catch (err) {

@@ -82,20 +82,19 @@ const userSchema = new mongoose.Schema(
 /* =========================
    ⚡ INDEXES
 ========================= */
-
 userSchema.index({ githubId: 1 });
 
 /* =========================
-   🔥 VIRTUALS (FIXED 💀)
+   🔥 VIRTUALS
 ========================= */
 
-// ✅ ONLY installationId decides connection
+// ✅ GitHub connected based on installationId
 userSchema.virtual("githubConnected").get(function () {
   return !!this.installationId;
 });
 
 /* =========================
-   🔐 SAFE RESPONSE (FIXED 💀)
+   🔐 SAFE RESPONSE (FINAL FIX 🔥)
 ========================= */
 
 userSchema.methods.toSafeObject = function () {
@@ -105,7 +104,9 @@ userSchema.methods.toSafeObject = function () {
     email: this.email || "",
     avatar: this.avatar || "",
 
-    // 🔥 GitHub fields (frontend critical)
+    /* 🔥 CRITICAL FOR FRONTEND FLOW */
+    githubUsername: this.githubUsername || "",
+
     installationId: this.installationId || null,
     githubConnected: !!this.installationId
   };

@@ -108,7 +108,6 @@ export const login = async (req, res) => {
 // STEP 1 → redirect
 export const githubLogin = (req, res) => {
   const redirectUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&scope=repo`;
-
   res.redirect(redirectUrl);
 };
 
@@ -121,9 +120,6 @@ export const githubCallback = async (req, res) => {
       return res.status(400).json({ msg: "No code provided" });
     }
 
-    /* =========================
-       🔑 GET ACCESS TOKEN
-    ========================= */
     const tokenRes = await axios.post(
       "https://github.com/login/oauth/access_token",
       {
@@ -138,9 +134,6 @@ export const githubCallback = async (req, res) => {
 
     const accessToken = tokenRes.data.access_token;
 
-    /* =========================
-       👤 GET USER DATA
-    ========================= */
     const userRes = await axios.get("https://api.github.com/user", {
       headers: {
         Authorization: `token ${accessToken}`
@@ -148,48 +141,30 @@ export const githubCallback = async (req, res) => {
     });
 
     const githubUser = userRes.data;
-
     const githubUsername = githubUser.login.toLowerCase();
 
     console.log("👤 GitHub Login:", githubUsername);
 
     let user = await User.findOne({ githubId: githubUser.id });
 
-    /* =========================
-       🆕 CREATE USER
-    ========================= */
     if (!user) {
       user = await User.create({
         name: githubUser.name || githubUser.login,
-
-        // 🔥 IMPORTANT: always unique email
         email: githubUser.email || `${githubUser.id}@github.com`,
-
         githubId: githubUser.id,
         githubUsername,
         githubAccessToken: accessToken,
         avatar: githubUser.avatar_url
       });
-
       console.log("🆕 New GitHub user created");
-    }
-
-    /* =========================
-       🔄 UPDATE USER
-    ========================= */
-    else {
+    } else {
       user.githubAccessToken = accessToken;
       user.githubUsername = githubUsername;
       user.avatar = githubUser.avatar_url;
-
       await user.save();
-
       console.log("🔄 Existing user updated");
     }
 
-    /* =========================
-       🔐 GENERATE TOKEN
-    ========================= */
     const token = generateToken(user._id);
 
     res.redirect(
@@ -240,6 +215,31 @@ export const saveDeviceToken = async (req, res) => {
 
   } catch (err) {
     console.log("❌ Save device token error:", err.message);
+    res.status(500).json({
+      error: err.message
+    });
+  }
+};
+
+/* =========================
+   👤 GET PROFILE (FIX)
+========================= */
+export const getProfile = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        msg: "User not found"
+      });
+    }
+
+    res.json({
+      user: user.toSafeObject()
+    });
+
+  } catch (err) {
+    console.log("❌ getProfile error:", err.message);
     res.status(500).json({
       error: err.message
     });

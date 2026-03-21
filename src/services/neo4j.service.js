@@ -12,28 +12,48 @@ export const pushToNeo4j = async (
     console.log("🧠 Neo4j Sync Started");
 
     /* =========================
-       🧼 NORMALIZE DATA
+       🧼 NORMALIZE + SAFE DATA
     ========================= */
-    const cleanDeps = deps.map(d => ({
-      name: d.name?.toLowerCase().trim(),
-      version: d.version
-    }));
+    const cleanDeps = deps
+      .filter(d => d?.name)
+      .map(d => ({
+        name: String(d.name).toLowerCase().trim(),
+        version: String(d.version || "unknown")
+      }));
 
-    const cleanEdges = depEdges.map(e => ({
-      from: e.from?.toLowerCase().trim(),
-      to: e.to?.toLowerCase().trim()
-    }));
+    const cleanEdges = depEdges
+      .filter(e => e?.from && e?.to)
+      .map(e => ({
+        from: String(e.from).toLowerCase().trim(),
+        to: String(e.to).toLowerCase().trim()
+      }));
 
-    const cleanVulns = vulns.map(v => ({
-      package: v.package?.toLowerCase().trim(),
-      id: v.cve || `${v.package}_unknown`,
-      severity: v.severity || "UNKNOWN"
-    }));
+    const cleanVulns = vulns
+      .filter(v => v?.package)
+      .map(v => ({
+        package: String(v.package).toLowerCase().trim(),
+        id: String(v.cve || `${v.package}_unknown`),
+        severity: String(v.severity || "UNKNOWN")
+      }));
 
     /* =========================
-       🔥 ROOT PACKAGE (CRITICAL FIX)
+       🔥 ROOT DETECTION (FIXED)
     ========================= */
-    const ROOT = depEdges[0]?.from || "root";
+    const ROOT =
+      cleanEdges.length > 0
+        ? cleanEdges[0].from
+        : cleanDeps[0]?.name || "root";
+
+    /* =========================
+       🧹 CLEAN OLD GRAPH (OPTIONAL BUT BEST)
+    ========================= */
+    await session.run(
+      `
+      MATCH (r:Repo {id: $repoId})-[*]->(n)
+      DETACH DELETE n
+      `,
+      { repoId }
+    );
 
     /* =========================
        ✅ CREATE REPO
@@ -57,7 +77,7 @@ export const pushToNeo4j = async (
     );
 
     /* =========================
-       ✅ REPO → ROOT (🔥 IMPORTANT)
+       🔗 REPO → ROOT
     ========================= */
     await session.run(
       `
@@ -69,28 +89,28 @@ export const pushToNeo4j = async (
     );
 
     /* =========================
-       ✅ PACKAGES
+       📦 CREATE PACKAGES
     ========================= */
-    await session.run(
-      `
-      UNWIND $deps AS dep
-      MERGE (p:Package {name: dep.name})
-      ON CREATE SET 
-        p.version = dep.version,
-        p.createdAt = timestamp()
-      `,
-      { deps: cleanDeps }
-    );
+    if (cleanDeps.length > 0) {
+      await session.run(
+        `
+        UNWIND $deps AS dep
+        MERGE (p:Package {name: dep.name})
+        SET p.version = dep.version
+        `,
+        { deps: cleanDeps }
+      );
+    }
 
     /* =========================
-       🔥 DEPENDENCY CHAIN
+       🔗 DEPENDENCY EDGES
     ========================= */
     if (cleanEdges.length > 0) {
       await session.run(
         `
         UNWIND $edges AS edge
-        MERGE (a:Package {name: edge.from})
-        MERGE (b:Package {name: edge.to})
+        MATCH (a:Package {name: edge.from})
+        MATCH (b:Package {name: edge.to})
         MERGE (a)-[:DEPENDS_ON]->(b)
         `,
         { edges: cleanEdges }
@@ -108,8 +128,6 @@ export const pushToNeo4j = async (
         UNWIND $vulns AS v
         MATCH (p:Package {name: v.package})
         MERGE (vul:Vulnerability {id: v.id})
-        ON CREATE SET 
-          vul.createdAt = timestamp()
         SET vul.severity = v.severity
         MERGE (p)-[:HAS_VULN]->(vul)
         `,

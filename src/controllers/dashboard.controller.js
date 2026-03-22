@@ -11,6 +11,7 @@ export const getDashboard = async (req, res) => {
        🔍 Repo check
     ========================= */
     const repo = await Repo.findById(repoId).lean();
+
     if (!repo) {
       return res.status(404).json({ msg: "Repo not found" });
     }
@@ -23,13 +24,34 @@ export const getDashboard = async (req, res) => {
     }
 
     /* =========================
+       🚀 EARLY RETURN (IMPORTANT FIX)
+       👉 scan chal raha ho to heavy queries skip
+    ========================= */
+    if (repo.status !== "scanned") {
+      return res.json({
+        repo: {
+          id: repo._id,
+          name: repo.name,
+          url: repo.url,
+          status: repo.status,
+          lastScanned: repo.lastScanned || null,
+          version: repo.scanCount || 0
+        },
+        stats: null,
+        severity: null,
+        topVulnerabilities: [],
+        alerts: []
+      });
+    }
+
+    /* =========================
        🔥 VERSION SYSTEM
     ========================= */
     const latestVersion = repo.scanCount || 0;
     const prevVersion = latestVersion > 1 ? latestVersion - 1 : null;
 
     /* =========================
-       ⚡ Parallel Queries (LATEST ONLY)
+       ⚡ Parallel Queries (OPTIMIZED)
     ========================= */
     const [dependencies, vulnerabilities, alerts] = await Promise.all([
       Dependency.find({
@@ -56,12 +78,12 @@ export const getDashboard = async (req, res) => {
     ========================= */
     let critical = 0, high = 0, medium = 0, low = 0;
 
-    vulnerabilities.forEach(v => {
+    for (const v of vulnerabilities) {
       if (v.severity === "CRITICAL") critical++;
       else if (v.severity === "HIGH") high++;
       else if (v.severity === "MEDIUM") medium++;
       else low++;
-    });
+    }
 
     /* =========================
        🧠 Risk Score
@@ -82,15 +104,14 @@ export const getDashboard = async (req, res) => {
     /* =========================
        🔥 TOP VULNERABILITIES
     ========================= */
-    const topVulnerabilities = [...vulnerabilities]
-      .sort((a, b) => {
-        const order = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
-        return order[b.severity] - order[a.severity];
-      })
+    const severityOrder = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+
+    const topVulnerabilities = vulnerabilities
+      .sort((a, b) => severityOrder[b.severity] - severityOrder[a.severity])
       .slice(0, 5);
 
     /* =========================
-       🔁 TREND (LATEST vs PREVIOUS)
+       🔁 TREND
     ========================= */
     let trend = 0;
 
@@ -102,12 +123,12 @@ export const getDashboard = async (req, res) => {
 
       let prevScore = 0;
 
-      prevVulns.forEach(v => {
+      for (const v of prevVulns) {
         if (v.severity === "CRITICAL") prevScore += 3;
         else if (v.severity === "HIGH") prevScore += 2;
         else if (v.severity === "MEDIUM") prevScore += 1;
         else prevScore += 0.5;
-      });
+      }
 
       prevScore = Math.min(10, Math.max(1, prevScore));
 
@@ -115,9 +136,9 @@ export const getDashboard = async (req, res) => {
     }
 
     /* =========================
-       📊 RESPONSE
+       📊 FINAL RESPONSE
     ========================= */
-    res.json({
+    return res.json({
       repo: {
         id: repo._id,
         name: repo.name,
@@ -132,7 +153,7 @@ export const getDashboard = async (req, res) => {
         health,
         dependencies: dependencyCount,
         vulnerabilities: vulnCount,
-        trend // 🔥 +ve = worse, -ve = better
+        trend
       },
 
       severity: {
@@ -143,14 +164,13 @@ export const getDashboard = async (req, res) => {
       },
 
       topVulnerabilities,
-
       alerts
     });
 
   } catch (err) {
     console.log("❌ Dashboard error:", err.message);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Failed to fetch dashboard"
     });
   }

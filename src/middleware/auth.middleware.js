@@ -1,5 +1,4 @@
 import jwt from "jsonwebtoken";
-import { ENV } from "../config/env.js";
 import User from "../models/user.model.js";
 
 export const authMiddleware = async (req, res, next) => {
@@ -38,12 +37,12 @@ export const authMiddleware = async (req, res, next) => {
     /* =========================
        🔓 VERIFY TOKEN
     ========================= */
-    const decoded = jwt.verify(token, ENV.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    console.log("🔍 DECODED TOKEN:", decoded); // DEBUG
+    console.log("🔍 DECODED TOKEN:", decoded);
 
     /* =========================
-       🧠 HANDLE ALL CASES
+       🧠 GET USER ID
     ========================= */
     const userId =
       decoded.id ||
@@ -57,9 +56,9 @@ export const authMiddleware = async (req, res, next) => {
     }
 
     /* =========================
-       👤 GET USER
+       👤 FETCH FULL USER (CRITICAL FIX)
     ========================= */
-    const user = await User.findById(userId).select("_id role");
+    const user = await User.findById(userId);
 
     if (!user) {
       return res.status(401).json({
@@ -68,17 +67,13 @@ export const authMiddleware = async (req, res, next) => {
     }
 
     /* =========================
-       ✅ ATTACH USER
+       ✅ ATTACH FULL USER
     ========================= */
-    req.user = {
-      id: user._id.toString(),
-      role: user.role
-    };
+    req.user = user; // 🔥 FULL USER OBJECT
 
     next();
 
   } catch (err) {
-
     console.log("❌ AUTH ERROR:", err.message);
 
     /* =========================

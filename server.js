@@ -13,33 +13,46 @@ dotenv.config();
 ========================= */
 const startServer = async () => {
   try {
-    // 🗄️ DB connect
+    /* =========================
+       🗄️ CONNECT DB
+    ========================= */
     await connectDB();
     console.log("✅ MongoDB connected");
 
     const PORT = process.env.PORT || 5000;
 
     /* =========================
-       🔥 SOCKET SETUP
+       🔥 CREATE HTTP SERVER
     ========================= */
-
-    // 👇 create http server
     const server = http.createServer(app);
 
-    // 👇 attach socket
+    /* =========================
+       🔥 SOCKET SETUP (FINAL FIX)
+    ========================= */
     const io = new Server(server, {
       cors: {
-        origin: "*", // production me restrict karna
+        origin: "*", // ⚠️ production me specific domain use karna
         methods: ["GET", "POST"],
+        credentials: true,
       },
+      transports: ["websocket", "polling"], // 🔥 important fix
+      pingTimeout: 60000, // 🔥 prevent timeout
     });
 
-    // 👇 make io accessible everywhere
+    // 👇 make io globally available
     app.set("io", io);
 
-    // 👇 socket connection log
+    /* =========================
+       🔌 SOCKET EVENTS
+    ========================= */
     io.on("connection", (socket) => {
       console.log("🔌 Client connected:", socket.id);
+
+      // 👇 join room (VERY IMPORTANT 🔥)
+      socket.on("joinRepoRoom", (repoId) => {
+        socket.join(repoId);
+        console.log(`📦 Joined room: ${repoId}`);
+      });
 
       socket.on("disconnect", () => {
         console.log("❌ Client disconnected:", socket.id);
@@ -54,7 +67,7 @@ const startServer = async () => {
     });
 
   } catch (err) {
-    console.log("❌ Server start error:", err.message);
+    console.error("❌ Server start error:", err.message);
     process.exit(1);
   }
 };
@@ -62,13 +75,16 @@ const startServer = async () => {
 /* =========================
    ⚠️ GLOBAL ERROR HANDLING
 ========================= */
+
+// 🔥 handle promise errors
 process.on("unhandledRejection", (err) => {
-  console.log("❌ Unhandled Rejection:", err.message);
+  console.error("❌ Unhandled Rejection:", err.message);
 });
 
+// 🔥 handle sync errors
 process.on("uncaughtException", (err) => {
-  console.log("❌ Uncaught Exception:", err.message);
+  console.error("❌ Uncaught Exception:", err.message);
 });
 
-// 🚀 Start
+// 🚀 Start server
 startServer();

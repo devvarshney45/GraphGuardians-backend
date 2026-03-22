@@ -32,9 +32,7 @@ export const analyzeRepo = async (req, res) => {
 
     const { url, repoId, token } = req.body;
 
-    /* =========================
-       🔐 VALIDATION
-    ========================= */
+    /* ========================= VALIDATION ========================= */
     const repo = await Repo.findById(repoId);
     if (!repo) return response.status(404).json({ msg: "Repo not found" });
 
@@ -52,9 +50,7 @@ export const analyzeRepo = async (req, res) => {
     console.log(`🔢 Version: ${currentVersion} → ${newVersion}`);
     console.log("==================================");
 
-    /* =========================
-       OLD DATA
-    ========================= */
+    /* ========================= OLD DATA ========================= */
     const oldDeps = currentVersion
       ? await Dependency.find({ repoId, versionGroup: currentVersion }).lean()
       : [];
@@ -63,9 +59,7 @@ export const analyzeRepo = async (req, res) => {
       ? await Vulnerability.find({ repoId, versionGroup: currentVersion }).lean()
       : [];
 
-    /* =========================
-       FETCH package.json
-    ========================= */
+    /* ========================= FETCH PACKAGE ========================= */
     const pkg = await fetchPackageJson(url, token);
     if (!pkg) {
       return response.status(400).json({
@@ -75,9 +69,7 @@ export const analyzeRepo = async (req, res) => {
 
     console.log("📥 package.json fetched");
 
-    /* =========================
-       EXTRACT DEPENDENCIES
-    ========================= */
+    /* ========================= DEPENDENCIES ========================= */
     const rawDeps = extractDependencies(pkg);
 
     const seen = new Set();
@@ -108,9 +100,7 @@ export const analyzeRepo = async (req, res) => {
       await Dependency.insertMany(uniqueDeps, { ordered: false });
     }
 
-    /* =========================
-       VULNERABILITIES
-    ========================= */
+    /* ========================= VULNERABILITIES ========================= */
     const vulns = await checkVulnerabilities(uniqueDeps);
 
     const formattedVulns = vulns.map(v => ({
@@ -129,9 +119,7 @@ export const analyzeRepo = async (req, res) => {
 
     console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
 
-    /* =========================
-       🔔 ALERTS + FIREBASE (FINAL FIX 💀)
-    ========================= */
+    /* ========================= ALERTS ========================= */
     const alerts = generateAlerts(
       repoIdStr,
       findNewVulnerabilities(oldVulns, formattedVulns),
@@ -144,43 +132,25 @@ export const analyzeRepo = async (req, res) => {
 
       try {
         const user = await User.findById(repo.userId);
+        const tokens = user?.fcmTokens || [];
 
-        if (!user) {
-          console.log("❌ User not found");
-        } else {
-          const tokens = user.fcmTokens || []; // ✅ FIXED
-
-          console.log("📱 FCM TOKENS:", tokens);
-
-          if (!tokens.length) {
-            console.log("⚠️ No FCM tokens → notification skipped");
-          } else {
-            console.log("🚀 Sending Firebase notification...");
-
-            await sendNotification(
-              tokens,
-              "🚨 Security Alert",
-              `${alerts.length} new vulnerabilities detected`
-            );
-          }
+        if (tokens.length) {
+          await sendNotification(
+            tokens,
+            "🚨 Security Alert",
+            `${alerts.length} new vulnerabilities detected`
+          );
         }
 
       } catch (err) {
         console.log("❌ Firebase failed:", err.message);
       }
-
-    } else {
-      console.log("✅ No new alerts");
     }
 
-    /* =========================
-       🌳 DEPENDENCY TREE
-    ========================= */
+    /* ========================= TREE ========================= */
     let cleanEdges = [];
 
     try {
-      console.log("🌳 Generating dependency tree...");
-
       const tree = await getDependencyTree(url, token);
 
       if (tree) {
@@ -196,11 +166,7 @@ export const analyzeRepo = async (req, res) => {
       console.log("⚠️ Tree parsing failed:", err.message);
     }
 
-    console.log(`🔗 Clean edges: ${cleanEdges.length}`);
-
-    /* =========================
-       🔥 NEO4J
-    ========================= */
+    /* ========================= NEO4J ========================= */
     await pushToNeo4j(
       repoIdStr,
       uniqueDeps.map(d => ({
@@ -215,11 +181,7 @@ export const analyzeRepo = async (req, res) => {
       cleanEdges
     );
 
-    console.log("🧠 Neo4j Sync Done ✅");
-
-    /* =========================
-       📊 HISTORY
-    ========================= */
+    /* ========================= HISTORY ========================= */
     const risk = calculateRisk(formattedVulns);
 
     await ScanHistory.create({
@@ -230,9 +192,7 @@ export const analyzeRepo = async (req, res) => {
       vulnerabilityCount: formattedVulns.length
     });
 
-    /* =========================
-       UPDATE REPO
-    ========================= */
+    /* ========================= UPDATE REPO ========================= */
     const updatedRepo = await Repo.findByIdAndUpdate(
       repoId,
       {
@@ -247,8 +207,22 @@ export const analyzeRepo = async (req, res) => {
     ).lean();
 
     console.log("📊 Scan Completed ✅");
-    console.log("==================================\n");
 
+    /* ========================= 🔥 SOCKET EMIT ========================= */
+    const io = req.app.get("io");
+
+    if (io) {
+      io.emit(`scan-${repoIdStr}`, {
+        repo: updatedRepo,
+        stats: {
+          riskScore: risk,
+          dependencies: uniqueDeps.length,
+          vulnerabilities: formattedVulns.length
+        }
+      });
+    }
+
+    /* ========================= RESPONSE ========================= */
     return response.json({
       version: newVersion,
       repo: updatedRepo,

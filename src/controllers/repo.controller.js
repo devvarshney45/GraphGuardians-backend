@@ -28,26 +28,28 @@ const parseRepo = (url) => {
 };
 
 /* =========================
-   🔐 GET HEADERS
+   🔐 GET HEADERS (FIXED)
 ========================= */
 
-const getHeaders = (token) => {
+const getHeaders = (token, isAppToken = false) => {
   const headers = {
     Accept: "application/vnd.github+json"
   };
 
   if (token) {
-    headers.Authorization = `token ${token}`;
+    headers.Authorization = isAppToken
+      ? `Bearer ${token}`   // ✅ GitHub App token
+      : `token ${token}`;   // ✅ OAuth / PAT
   }
 
   return headers;
 };
 
 /* =========================
-   🔥 CREATE WEBHOOK
+   🔥 CREATE WEBHOOK (FIXED)
 ========================= */
 
-const createWebhook = async (owner, repo, token) => {
+const createWebhook = async (owner, repo, token, isAppToken) => {
   try {
     const webhookUrl = `${process.env.BASE_URL}/api/github/webhook`;
 
@@ -63,7 +65,7 @@ const createWebhook = async (owner, repo, token) => {
         }
       },
       {
-        headers: getHeaders(token)
+        headers: getHeaders(token, isAppToken)
       }
     );
 
@@ -80,7 +82,7 @@ const createWebhook = async (owner, repo, token) => {
 };
 
 /* =========================
-   ➕ ADD REPO (FINAL FIXED)
+   ➕ ADD REPO (FULL FIXED)
 ========================= */
 
 export const addRepo = async (req, res) => {
@@ -96,13 +98,15 @@ export const addRepo = async (req, res) => {
     const { owner, repo, cleanUrl } = parseRepo(url);
 
     /* =========================
-       🔐 GET TOKEN
+       🔐 GET TOKEN (FIXED)
     ========================= */
     let token = null;
+    let isAppToken = false;
 
     if (user.installationId) {
       try {
         token = await getInstallationToken(user.installationId);
+        isAppToken = true;
         console.log("🔐 Using App token");
       } catch (err) {
         console.log("❌ App token failed, fallback OAuth");
@@ -114,6 +118,12 @@ export const addRepo = async (req, res) => {
       console.log("🔐 Using OAuth token");
     }
 
+    if (!token) {
+      return res.status(401).json({
+        msg: "GitHub authentication required"
+      });
+    }
+
     /* =========================
        🔍 VALIDATE REPO
     ========================= */
@@ -122,7 +132,7 @@ export const addRepo = async (req, res) => {
     try {
       const response = await axios.get(
         `https://api.github.com/repos/${owner}/${repo}`,
-        { headers: getHeaders(token) }
+        { headers: getHeaders(token, isAppToken) }
       );
 
       repoData = response.data;
@@ -166,10 +176,10 @@ export const addRepo = async (req, res) => {
     /* =========================
        🔗 WEBHOOK
     ========================= */
-    await createWebhook(owner, repo, token);
+    await createWebhook(owner, repo, token, isAppToken);
 
     /* =========================
-       🚀 AUTO SCAN
+       🚀 AUTO SCAN (IMPORTANT FIX)
     ========================= */
     try {
       await analyzeRepo(
@@ -177,7 +187,8 @@ export const addRepo = async (req, res) => {
           body: {
             url: cleanUrl,
             repoId: newRepo._id,
-            token
+            token,
+            isAppToken   // 🔥 VERY IMPORTANT
           },
           user: { id: userId }
         },
@@ -195,11 +206,11 @@ export const addRepo = async (req, res) => {
     }
 
     /* =========================
-       🔥 FINAL RESPONSE (IMPORTANT)
+       🔥 FINAL RESPONSE
     ========================= */
     res.status(201).json({
       msg: "Repo added successfully 🚀",
-      repo: newRepo   // 🔥 THIS FIXES YOUR FRONTEND
+      repo: newRepo
     });
 
   } catch (err) {

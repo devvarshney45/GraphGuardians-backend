@@ -9,53 +9,86 @@ import { Server } from "socket.io";
 dotenv.config();
 
 /* =========================
+   🔥 GLOBAL VARS
+========================= */
+const PORT = process.env.PORT || 5000;
+
+/* =========================
    🔥 START SERVER FUNCTION
 ========================= */
 const startServer = async () => {
   try {
     /* =========================
-       🗄️ CONNECT DB
+       🗄️ CONNECT DATABASE
     ========================= */
     await connectDB();
     console.log("✅ MongoDB connected");
 
-    const PORT = process.env.PORT || 5000;
-
     /* =========================
-       🔥 CREATE HTTP SERVER
+       🌐 CREATE HTTP SERVER
     ========================= */
     const server = http.createServer(app);
 
     /* =========================
-       🔥 SOCKET SETUP (FINAL FIX)
+       🔥 SOCKET.IO SETUP (PRODUCTION READY)
     ========================= */
     const io = new Server(server, {
       cors: {
-        origin: "*", // ⚠️ production me specific domain use karna
+        origin: process.env.CLIENT_URL || "*", // 🔥 production me restrict
         methods: ["GET", "POST"],
         credentials: true,
       },
-      transports: ["websocket", "polling"], // 🔥 important fix
-      pingTimeout: 60000, // 🔥 prevent timeout
+
+      transports: ["websocket", "polling"], // 🔥 fallback support
+      pingTimeout: 60000, // 🔥 prevent disconnects
+      pingInterval: 25000,
     });
 
-    // 👇 make io globally available
+    /* =========================
+       🌍 GLOBAL SOCKET ACCESS
+    ========================= */
     app.set("io", io);
 
     /* =========================
        🔌 SOCKET EVENTS
     ========================= */
     io.on("connection", (socket) => {
-      console.log("🔌 Client connected:", socket.id);
+      console.log(`🔌 Client connected: ${socket.id}`);
 
-      // 👇 join room (VERY IMPORTANT 🔥)
+      /* =========================
+         📦 JOIN ROOM (IMPORTANT)
+      ========================= */
       socket.on("joinRepoRoom", (repoId) => {
+        if (!repoId) return;
+
         socket.join(repoId);
-        console.log(`📦 Joined room: ${repoId}`);
+        console.log(`📦 Socket ${socket.id} joined room: ${repoId}`);
       });
 
-      socket.on("disconnect", () => {
-        console.log("❌ Client disconnected:", socket.id);
+      /* =========================
+         🚪 LEAVE ROOM (OPTIONAL)
+      ========================= */
+      socket.on("leaveRepoRoom", (repoId) => {
+        socket.leave(repoId);
+        console.log(`🚪 Socket ${socket.id} left room: ${repoId}`);
+      });
+
+      /* =========================
+         ❤️ HEARTBEAT (DEBUG)
+      ========================= */
+      socket.on("ping-check", () => {
+        socket.emit("pong-check");
+      });
+
+      /* =========================
+         ❌ DISCONNECT
+      ========================= */
+      socket.on("disconnect", (reason) => {
+        console.log(`❌ Disconnected: ${socket.id} | Reason: ${reason}`);
+      });
+
+      socket.on("connect_error", (err) => {
+        console.log("❌ Socket error:", err.message);
       });
     });
 
@@ -64,6 +97,7 @@ const startServer = async () => {
     ========================= */
     server.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
     });
 
   } catch (err) {
@@ -76,12 +110,12 @@ const startServer = async () => {
    ⚠️ GLOBAL ERROR HANDLING
 ========================= */
 
-// 🔥 handle promise errors
+// 🔥 Promise errors
 process.on("unhandledRejection", (err) => {
   console.error("❌ Unhandled Rejection:", err.message);
 });
 
-// 🔥 handle sync errors
+// 🔥 Sync errors
 process.on("uncaughtException", (err) => {
   console.error("❌ Uncaught Exception:", err.message);
 });

@@ -10,16 +10,43 @@ import { authMiddleware } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
-// ➕ Add repo
+/* =========================
+   🧪 DEBUG MIDDLEWARE (optional)
+========================= */
+// router.use((req, res, next) => {
+//   console.log(`📡 ${req.method} ${req.originalUrl}`);
+//   next();
+// });
+
+/* =========================
+   ➕ ADD REPO
+========================= */
 router.post("/", authMiddleware, addRepo);
 
-// 📂 Get all repos (user specific)
+/* =========================
+   📂 GET ALL USER REPOS
+========================= */
 router.get("/", authMiddleware, getRepos);
 
-// 📄 Get single repo
+/* =========================
+   📄 GET SINGLE REPO
+========================= */
 router.get("/:repoId", authMiddleware, getRepoById);
 
-// 🗑️ Delete repo
+/* =========================
+   🗑️ DELETE REPO
+========================= */
 router.delete("/:repoId", authMiddleware, deleteRepo);
+
+/* =========================
+   ❤️ HEALTH CHECK (NEW 🔥)
+   👉 useful for testing server alive
+========================= */
+router.get("/health/check", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "Repo service running 🚀"
+  });
+});
 
 export default router;

@@ -48,7 +48,6 @@ const createWebhook = async (owner, repo, token, isAppToken) => {
     );
 
     console.log("✅ Webhook created");
-
   } catch (err) {
     if (err.response?.status === 422) {
       console.log("⚠️ Webhook already exists");
@@ -68,8 +67,7 @@ export const addRepo = async (req, res) => {
       return res.status(400).json({ msg: "Repo URL required" });
     }
 
-    const user = req.user;
-    const userId = user?._id?.toString();
+    const userId = req.user?._id?.toString();
 
     if (!userId) {
       return res.status(401).json({ msg: "Unauthorized" });
@@ -77,108 +75,124 @@ export const addRepo = async (req, res) => {
 
     const { owner, repo, cleanUrl } = parseRepo(url);
 
-    /* ========================= TOKEN ========================= */
     let token = null;
     let isAppToken = false;
 
-    if (user.installationId) {
+    if (req.user.installationId) {
       try {
-        token = await getInstallationToken(user.installationId);
+        token = await getInstallationToken(req.user.installationId);
         isAppToken = true;
-        console.log("🔐 Using App token");
       } catch {}
     }
 
-    if (!token && user.githubAccessToken) {
-      token = user.githubAccessToken;
-      console.log("🔐 Using OAuth token");
+    if (!token && req.user.githubAccessToken) {
+      token = req.user.githubAccessToken;
     }
 
     if (!token) {
-      return res.status(401).json({
-        msg: "GitHub not connected"
-      });
+      return res.status(401).json({ msg: "GitHub not connected" });
     }
 
-    /* ========================= VALIDATE REPO ========================= */
-    let repoData;
-
-    try {
-      const response = await axios.get(
-        `https://api.github.com/repos/${owner}/${repo}`,
-        { headers: getHeaders(token, isAppToken) }
-      );
-
-      repoData = response.data;
-    } catch {
-      return res.status(404).json({
-        msg: "Repository not found or access denied"
-      });
-    }
-
-    /* ========================= DUPLICATE ========================= */
     const existing = await Repo.findOne({ url: cleanUrl, userId });
-
     if (existing) {
-      return res.status(400).json({
-        msg: "Repo already added"
-      });
+      return res.status(400).json({ msg: "Repo already added" });
     }
 
-    /* ========================= CREATE REPO ========================= */
+    const repoData = await axios.get(
+      `https://api.github.com/repos/${owner}/${repo}`,
+      { headers: getHeaders(token, isAppToken) }
+    );
+
     const newRepo = await Repo.create({
       userId,
-      name: repoData.full_name,
+      name: repoData.data.full_name,
       url: cleanUrl,
-      isPrivate: repoData.private,
-      stars: repoData.stargazers_count,
-      forks: repoData.forks_count,
-      language: repoData.language,
-      riskScore: 0,
+      isPrivate: repoData.data.private,
+      stars: repoData.data.stargazers_count,
+      forks: repoData.data.forks_count,
+      language: repoData.data.language,
       status: "scanning"
     });
 
-    console.log(`📦 Repo added: ${repoData.full_name}`);
+    createWebhook(owner, repo, token, isAppToken).catch(() => {});
 
-    /* ========================= WEBHOOK ========================= */
-    await createWebhook(owner, repo, token, isAppToken);
+    res.status(201).json({ repo: newRepo });
 
-    /* ========================= 🔥 RESPONSE FIRST ========================= */
-    res.status(201).json({
-      success: true,
-      repo: newRepo
-    });
-
-    /* ========================= 🚀 BACKGROUND SCAN (FINAL FIX) ========================= */
-    setImmediate(async () => {
-      try {
-        await analyzeRepo(
-          {
-            body: {
-              url: cleanUrl,
-              repoId: newRepo._id,
-              token,
-              isAppToken
-            },
-            user: { id: userId },
-            app: req.app // 🔥 VERY IMPORTANT
+    // 🔥 background scan
+    setImmediate(() => {
+      analyzeRepo(
+        {
+          body: {
+            url: cleanUrl,
+            repoId: newRepo._id,
+            token
           },
-          { json: () => {} }
-        );
-      } catch (err) {
-        console.log("❌ Background scan failed:", err.message);
-
-        await Repo.findByIdAndUpdate(newRepo._id, {
-          status: "error"
-        });
-      }
+          user: { id: userId },
+          app: req.app
+        },
+        { json: () => {} }
+      );
     });
 
   } catch (err) {
     console.log("❌ Add repo error:", err.message);
+    res.status(500).json({ error: "Failed to add repo" });
+  }
+};
 
-    return res.status(500).json({
-      error: "Failed to add repo"
-    });
+/* ========================= GET ALL REPOS ========================= */
+export const getRepos = async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    const repos = await Repo.find({ userId })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json(repos);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch repos" });
+  }
+};
+
+/* ========================= GET SINGLE REPO ========================= */
+export const getRepoById = async (req, res) => {
+  try {
+    const { repoId } = req.params;
+
+    const repo = await Repo.findById(repoId);
+
+    if (!repo) {
+      return res.status(404).json({ msg: "Repo not found" });
+    }
+
+    res.json(repo);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch repo" });
+  }
+};
+
+/* ========================= DELETE REPO (FIXED 🔥) ========================= */
+export const deleteRepo = async (req, res) => {
+  try {
+    const { repoId } = req.params;
+
+    const repo = await Repo.findById(repoId);
+
+    if (!repo) {
+      return res.status(404).json({ msg: "Repo not found" });
+    }
+
+    if (repo.userId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ msg: "Unauthorized" });
+    }
+
+    await Repo.findByIdAndDelete(repoId);
+
+    res.json({ msg: "Repo deleted successfully" });
+
+  } catch (err) {
+    console.log("❌ Delete repo error:", err.message);
+    res.status(500).json({ error: "Failed to delete repo" });
   }
 };

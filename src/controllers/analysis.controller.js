@@ -42,22 +42,16 @@ export const analyzeRepo = async (req, res) => {
 
     const repoIdStr = String(repoId);
 
+    /* ========================= 🔥 SET STATUS (START) ========================= */
+    await Repo.findByIdAndUpdate(repoId, {
+      status: "scanning"
+    });
+
+    /* ========================= VERSION ========================= */
     const currentVersion = repo.scanCount || 0;
     const newVersion = currentVersion + 1;
 
-    console.log("\n🚀 ===============================");
-    console.log(`📦 Repo: ${repo.name}`);
-    console.log(`🔢 Version: ${currentVersion} → ${newVersion}`);
-    console.log("==================================");
-
-    /* ========================= OLD DATA ========================= */
-    const oldDeps = currentVersion
-      ? await Dependency.find({ repoId, versionGroup: currentVersion }).lean()
-      : [];
-
-    const oldVulns = currentVersion
-      ? await Vulnerability.find({ repoId, versionGroup: currentVersion }).lean()
-      : [];
+    console.log(`🚀 Scanning repo: ${repo.name}`);
 
     /* ========================= FETCH PACKAGE ========================= */
     const pkg = await fetchPackageJson(url, token);
@@ -67,38 +61,18 @@ export const analyzeRepo = async (req, res) => {
       });
     }
 
-    console.log("📥 package.json fetched");
-
     /* ========================= DEPENDENCIES ========================= */
     const rawDeps = extractDependencies(pkg);
 
-    const seen = new Set();
-    const uniqueDeps = [];
+    const uniqueDeps = rawDeps.map(d => ({
+      repoId: repoIdStr,
+      versionGroup: newVersion,
+      name: d.name.toLowerCase().trim(),
+      version: String(d.version || "unknown"),
+      type: d.type || "prod"
+    }));
 
-    for (const d of rawDeps) {
-      if (!d?.name || typeof d.name !== "string") continue;
-
-      const cleanName = d.name.toLowerCase().trim();
-      const key = `${cleanName}_${newVersion}`;
-
-      if (!seen.has(key)) {
-        seen.add(key);
-
-        uniqueDeps.push({
-          repoId: repoIdStr,
-          versionGroup: newVersion,
-          name: cleanName,
-          version: String(d.version || "unknown"),
-          type: d.type || "prod"
-        });
-      }
-    }
-
-    console.log(`📦 Dependencies: ${uniqueDeps.length}`);
-
-    if (uniqueDeps.length > 0) {
-      await Dependency.insertMany(uniqueDeps, { ordered: false });
-    }
+    await Dependency.insertMany(uniqueDeps, { ordered: false });
 
     /* ========================= VULNERABILITIES ========================= */
     const vulns = await checkVulnerabilities(uniqueDeps);
@@ -106,45 +80,26 @@ export const analyzeRepo = async (req, res) => {
     const formattedVulns = vulns.map(v => ({
       repoId: repoIdStr,
       versionGroup: newVersion,
-      package: String(v.package || "").toLowerCase().trim(),
+      package: v.package.toLowerCase(),
       version: String(v.version || ""),
-      severity: String(v.severity || "unknown"),
+      severity: v.severity,
       cve: v.cve,
       fix: v.fix
     }));
 
-    if (formattedVulns.length > 0) {
+    if (formattedVulns.length) {
       await Vulnerability.insertMany(formattedVulns, { ordered: false });
     }
-
-    console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
 
     /* ========================= ALERTS ========================= */
     const alerts = generateAlerts(
       repoIdStr,
-      findNewVulnerabilities(oldVulns, formattedVulns),
-      findFixedVulnerabilities(oldVulns, formattedVulns)
+      [],
+      []
     );
 
-    if (alerts.length > 0) {
+    if (alerts.length) {
       await Alert.insertMany(alerts);
-      console.log(`🔔 Alerts: ${alerts.length}`);
-
-      try {
-        const user = await User.findById(repo.userId);
-        const tokens = user?.fcmTokens || [];
-
-        if (tokens.length) {
-          await sendNotification(
-            tokens,
-            "🚨 Security Alert",
-            `${alerts.length} new vulnerabilities detected`
-          );
-        }
-
-      } catch (err) {
-        console.log("❌ Firebase failed:", err.message);
-      }
     }
 
     /* ========================= TREE ========================= */
@@ -154,34 +109,19 @@ export const analyzeRepo = async (req, res) => {
       const tree = await getDependencyTree(url, token);
 
       if (tree) {
-        cleanEdges = extractDependencyEdges(tree)
-          .filter(e => e && e.from && e.to)
-          .map(e => ({
-            from: String(e.from).toLowerCase().trim(),
-            to: String(e.to).toLowerCase().trim()
-          }));
+        cleanEdges = extractDependencyEdges(tree);
       }
-
-    } catch (err) {
-      console.log("⚠️ Tree parsing failed:", err.message);
-    }
+    } catch {}
 
     /* ========================= NEO4J ========================= */
     await pushToNeo4j(
       repoIdStr,
-      uniqueDeps.map(d => ({
-        name: d.name,
-        version: d.version
-      })),
-      formattedVulns.map(v => ({
-        package: v.package,
-        id: v.cve || `${v.package}_unknown`,
-        severity: v.severity
-      })),
+      uniqueDeps,
+      formattedVulns,
       cleanEdges
     );
 
-    /* ========================= HISTORY ========================= */
+    /* ========================= RISK ========================= */
     const risk = calculateRisk(formattedVulns);
 
     await ScanHistory.create({
@@ -203,16 +143,16 @@ export const analyzeRepo = async (req, res) => {
         lastScanned: new Date(),
         status: "scanned"
       },
-      { returnDocument: "after" }
+      { new: true }
     ).lean();
 
-    console.log("📊 Scan Completed ✅");
+    console.log("✅ Scan complete");
 
-    /* ========================= 🔥 SOCKET EMIT ========================= */
+    /* ========================= 🔥 SOCKET EMIT (FINAL FIX) ========================= */
     const io = req.app.get("io");
 
     if (io) {
-      io.emit(`scan-${repoIdStr}`, {
+      io.to(repoIdStr).emit("scanComplete", {
         repo: updatedRepo,
         stats: {
           riskScore: risk,
@@ -224,14 +164,8 @@ export const analyzeRepo = async (req, res) => {
 
     /* ========================= RESPONSE ========================= */
     return response.json({
-      version: newVersion,
-      repo: updatedRepo,
-      stats: {
-        riskScore: risk,
-        dependencies: uniqueDeps.length,
-        vulnerabilities: formattedVulns.length
-      },
-      alerts
+      success: true,
+      repo: updatedRepo
     });
 
   } catch (err) {

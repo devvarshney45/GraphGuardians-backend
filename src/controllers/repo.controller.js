@@ -28,25 +28,20 @@ const parseRepo = (url) => {
 };
 
 /* =========================
-   🔐 GET HEADERS (FIXED)
+   🔐 GET HEADERS
 ========================= */
 
 const getHeaders = (token, isAppToken = false) => {
-  const headers = {
-    Accept: "application/vnd.github+json"
+  return {
+    Accept: "application/vnd.github+json",
+    Authorization: isAppToken
+      ? `Bearer ${token}`   // GitHub App
+      : `token ${token}`    // OAuth / PAT
   };
-
-  if (token) {
-    headers.Authorization = isAppToken
-      ? `Bearer ${token}`   // ✅ GitHub App token
-      : `token ${token}`;   // ✅ OAuth / PAT
-  }
-
-  return headers;
 };
 
 /* =========================
-   🔥 CREATE WEBHOOK (FIXED)
+   🔥 CREATE WEBHOOK
 ========================= */
 
 const createWebhook = async (owner, repo, token, isAppToken) => {
@@ -82,17 +77,30 @@ const createWebhook = async (owner, repo, token, isAppToken) => {
 };
 
 /* =========================
-   ➕ ADD REPO (FULL FIXED)
+   ➕ ADD REPO (FINAL FIXED)
 ========================= */
 
 export const addRepo = async (req, res) => {
   try {
     const { url } = req.body;
-    const user = req.user;
-    const userId = user?.id;
 
     if (!url) {
       return res.status(400).json({ msg: "Repo URL required" });
+    }
+
+    /* =========================
+       👤 USER (SAFE)
+    ========================= */
+    const user = req.user;
+
+    if (!user) {
+      return res.status(401).json({ msg: "Unauthorized" });
+    }
+
+    const userId = user._id?.toString();
+
+    if (!userId) {
+      return res.status(401).json({ msg: "Invalid user" });
     }
 
     const { owner, repo, cleanUrl } = parseRepo(url);
@@ -103,6 +111,7 @@ export const addRepo = async (req, res) => {
     let token = null;
     let isAppToken = false;
 
+    // ✅ Try GitHub App first
     if (user.installationId) {
       try {
         token = await getInstallationToken(user.installationId);
@@ -113,11 +122,13 @@ export const addRepo = async (req, res) => {
       }
     }
 
+    // ✅ Fallback OAuth
     if (!token && user.githubAccessToken) {
       token = user.githubAccessToken;
       console.log("🔐 Using OAuth token");
     }
 
+    // ❌ No token
     if (!token) {
       return res.status(401).json({
         msg: "GitHub authentication required"
@@ -132,7 +143,9 @@ export const addRepo = async (req, res) => {
     try {
       const response = await axios.get(
         `https://api.github.com/repos/${owner}/${repo}`,
-        { headers: getHeaders(token, isAppToken) }
+        {
+          headers: getHeaders(token, isAppToken)
+        }
       );
 
       repoData = response.data;
@@ -148,7 +161,10 @@ export const addRepo = async (req, res) => {
     /* =========================
        ❌ DUPLICATE CHECK
     ========================= */
-    const existing = await Repo.findOne({ url: cleanUrl, userId });
+    const existing = await Repo.findOne({
+      url: cleanUrl,
+      userId
+    });
 
     if (existing) {
       return res.status(400).json({
@@ -179,7 +195,7 @@ export const addRepo = async (req, res) => {
     await createWebhook(owner, repo, token, isAppToken);
 
     /* =========================
-       🚀 AUTO SCAN (IMPORTANT FIX)
+       🚀 AUTO SCAN (SAFE)
     ========================= */
     try {
       await analyzeRepo(
@@ -188,7 +204,7 @@ export const addRepo = async (req, res) => {
             url: cleanUrl,
             repoId: newRepo._id,
             token,
-            isAppToken   // 🔥 VERY IMPORTANT
+            isAppToken
           },
           user: { id: userId }
         },
@@ -206,7 +222,7 @@ export const addRepo = async (req, res) => {
     }
 
     /* =========================
-       🔥 FINAL RESPONSE
+       🔥 RESPONSE
     ========================= */
     res.status(201).json({
       msg: "Repo added successfully 🚀",
@@ -228,7 +244,7 @@ export const addRepo = async (req, res) => {
 
 export const getRepos = async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const userId = req.user?._id?.toString();
 
     const repos = await Repo.find({ userId })
       .sort({ createdAt: -1 })
@@ -262,7 +278,7 @@ export const getRepoById = async (req, res) => {
       return res.status(404).json({ msg: "Repo not found" });
     }
 
-    if (repo.userId.toString() !== req.user.id) {
+    if (repo.userId.toString() !== req.user._id.toString()) {
       return res.status(403).json({ msg: "Unauthorized" });
     }
 
@@ -291,7 +307,7 @@ export const deleteRepo = async (req, res) => {
       return res.status(404).json({ msg: "Repo not found" });
     }
 
-    if (repo.userId.toString() !== req.user.id) {
+    if (repo.userId.toString() !== req.user._id.toString()) {
       return res.status(403).json({ msg: "Unauthorized" });
     }
 

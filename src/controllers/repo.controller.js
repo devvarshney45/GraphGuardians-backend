@@ -28,20 +28,18 @@ const parseRepo = (url) => {
 };
 
 /* =========================
-   🔐 GET HEADERS
+   🔐 HEADERS
 ========================= */
 
-const getHeaders = (token, isAppToken = false) => {
-  return {
-    Accept: "application/vnd.github+json",
-    Authorization: isAppToken
-      ? `Bearer ${token}`   // GitHub App
-      : `token ${token}`    // OAuth / PAT
-  };
-};
+const getHeaders = (token, isAppToken = false) => ({
+  Accept: "application/vnd.github+json",
+  Authorization: isAppToken
+    ? `Bearer ${token}`
+    : `token ${token}`
+});
 
 /* =========================
-   🔥 CREATE WEBHOOK
+   🔥 WEBHOOK
 ========================= */
 
 const createWebhook = async (owner, repo, token, isAppToken) => {
@@ -59,9 +57,7 @@ const createWebhook = async (owner, repo, token, isAppToken) => {
           content_type: "json"
         }
       },
-      {
-        headers: getHeaders(token, isAppToken)
-      }
+      { headers: getHeaders(token, isAppToken) }
     );
 
     console.log("✅ Webhook created");
@@ -77,7 +73,7 @@ const createWebhook = async (owner, repo, token, isAppToken) => {
 };
 
 /* =========================
-   ➕ ADD REPO (FINAL FIXED)
+   ➕ ADD REPO (FINAL)
 ========================= */
 
 export const addRepo = async (req, res) => {
@@ -88,50 +84,50 @@ export const addRepo = async (req, res) => {
       return res.status(400).json({ msg: "Repo URL required" });
     }
 
-    /* =========================
-       👤 USER (SAFE)
-    ========================= */
     const user = req.user;
 
-    if (!user) {
+    if (!user || !user._id) {
       return res.status(401).json({ msg: "Unauthorized" });
     }
 
-    const userId = user._id?.toString();
+    const userId = user._id.toString();
 
-    if (!userId) {
-      return res.status(401).json({ msg: "Invalid user" });
-    }
+    console.log("👤 USER:", {
+      id: userId,
+      installationId: user.installationId,
+      hasGithubToken: !!user.githubAccessToken
+    });
 
     const { owner, repo, cleanUrl } = parseRepo(url);
 
     /* =========================
-       🔐 GET TOKEN (FIXED)
+       🔐 TOKEN LOGIC (STRONG FIX)
     ========================= */
     let token = null;
     let isAppToken = false;
 
-    // ✅ Try GitHub App first
+    // 🔥 Try App token
     if (user.installationId) {
       try {
         token = await getInstallationToken(user.installationId);
         isAppToken = true;
         console.log("🔐 Using App token");
       } catch (err) {
-        console.log("❌ App token failed, fallback OAuth");
+        console.log("❌ App token failed");
       }
     }
 
-    // ✅ Fallback OAuth
+    // 🔥 Fallback OAuth
     if (!token && user.githubAccessToken) {
       token = user.githubAccessToken;
       console.log("🔐 Using OAuth token");
     }
 
-    // ❌ No token
+    // ❌ FINAL FAIL
     if (!token) {
+      console.log("❌ NO TOKEN FOUND:", user);
       return res.status(401).json({
-        msg: "GitHub authentication required"
+        msg: "GitHub not connected. Please login with GitHub again."
       });
     }
 
@@ -143,9 +139,7 @@ export const addRepo = async (req, res) => {
     try {
       const response = await axios.get(
         `https://api.github.com/repos/${owner}/${repo}`,
-        {
-          headers: getHeaders(token, isAppToken)
-        }
+        { headers: getHeaders(token, isAppToken) }
       );
 
       repoData = response.data;
@@ -161,10 +155,7 @@ export const addRepo = async (req, res) => {
     /* =========================
        ❌ DUPLICATE CHECK
     ========================= */
-    const existing = await Repo.findOne({
-      url: cleanUrl,
-      userId
-    });
+    const existing = await Repo.findOne({ url: cleanUrl, userId });
 
     if (existing) {
       return res.status(400).json({
@@ -195,7 +186,7 @@ export const addRepo = async (req, res) => {
     await createWebhook(owner, repo, token, isAppToken);
 
     /* =========================
-       🚀 AUTO SCAN (SAFE)
+       🚀 AUTO SCAN
     ========================= */
     try {
       await analyzeRepo(
@@ -221,9 +212,6 @@ export const addRepo = async (req, res) => {
       });
     }
 
-    /* =========================
-       🔥 RESPONSE
-    ========================= */
     res.status(201).json({
       msg: "Repo added successfully 🚀",
       repo: newRepo
@@ -234,94 +222,6 @@ export const addRepo = async (req, res) => {
 
     res.status(500).json({
       error: "Failed to add repo"
-    });
-  }
-};
-
-/* =========================
-   📂 GET USER REPOS
-========================= */
-
-export const getRepos = async (req, res) => {
-  try {
-    const userId = req.user?._id?.toString();
-
-    const repos = await Repo.find({ userId })
-      .sort({ createdAt: -1 })
-      .lean();
-
-    res.json({
-      count: repos.length,
-      repos
-    });
-
-  } catch (err) {
-    console.log("❌ Fetch repos error:", err.message);
-
-    res.status(500).json({
-      error: "Failed to fetch repos"
-    });
-  }
-};
-
-/* =========================
-   📄 GET SINGLE REPO
-========================= */
-
-export const getRepoById = async (req, res) => {
-  try {
-    const { repoId } = req.params;
-
-    const repo = await Repo.findById(repoId);
-
-    if (!repo) {
-      return res.status(404).json({ msg: "Repo not found" });
-    }
-
-    if (repo.userId.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ msg: "Unauthorized" });
-    }
-
-    res.json(repo);
-
-  } catch (err) {
-    console.log("❌ Fetch repo error:", err.message);
-
-    res.status(500).json({
-      error: "Failed to fetch repo"
-    });
-  }
-};
-
-/* =========================
-   🗑️ DELETE REPO
-========================= */
-
-export const deleteRepo = async (req, res) => {
-  try {
-    const { repoId } = req.params;
-
-    const repo = await Repo.findById(repoId);
-
-    if (!repo) {
-      return res.status(404).json({ msg: "Repo not found" });
-    }
-
-    if (repo.userId.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ msg: "Unauthorized" });
-    }
-
-    await Repo.findByIdAndDelete(repoId);
-
-    res.json({
-      msg: "Repo deleted successfully"
-    });
-
-  } catch (err) {
-    console.log("❌ Delete repo error:", err.message);
-
-    res.status(500).json({
-      error: "Failed to delete repo"
     });
   }
 };

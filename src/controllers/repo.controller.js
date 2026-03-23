@@ -80,7 +80,6 @@ export const addRepo = async (req, res) => {
     let isAppToken = false;
 
     /* ========================= FIX START 🔥 ========================= */
-    // ❗ Always fetch fresh user from DB
     const fullUser = await User.findById(userId);
 
     console.log("👤 USER:", fullUser?.email);
@@ -91,7 +90,9 @@ export const addRepo = async (req, res) => {
       try {
         token = await getInstallationToken(fullUser.installationId);
         isAppToken = true;
-      } catch {}
+      } catch (err) {
+        console.log("⚠️ Installation token error:", err.message);
+      }
     }
 
     if (!token && fullUser?.githubAccessToken) {
@@ -182,7 +183,7 @@ export const getRepoById = async (req, res) => {
   }
 };
 
-/* ========================= DELETE REPO (FIXED 🔥) ========================= */
+/* ========================= DELETE REPO ========================= */
 export const deleteRepo = async (req, res) => {
   try {
     const { repoId } = req.params;
@@ -204,5 +205,30 @@ export const deleteRepo = async (req, res) => {
   } catch (err) {
     console.log("❌ Delete repo error:", err.message);
     res.status(500).json({ error: "Failed to delete repo" });
+  }
+};
+
+/* ========================= GET REPO DIFF (NEW 🔥) ========================= */
+export const getRepoDiff = async (req, res) => {
+  try {
+    const { repoId } = req.params;
+
+    const repo = await Repo.findById(repoId);
+
+    if (!repo) {
+      return res.status(404).json({ msg: "Repo not found" });
+    }
+
+    // ✅ SAFE RESPONSE (UI BREAK NA HO)
+    res.json({
+      message: "No comparison data yet",
+      changes: [],
+      added: 0,
+      removed: 0
+    });
+
+  } catch (err) {
+    console.log("❌ Diff error:", err.message);
+    res.status(500).json({ error: "Failed to get diff" });
   }
 };

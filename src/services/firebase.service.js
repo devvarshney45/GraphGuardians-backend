@@ -1,7 +1,7 @@
 import admin from "firebase-admin";
 
 /* =========================
-   🔥 INIT FIREBASE (ENV BASED)
+   🔥 INIT FIREBASE (SAFE)
 ========================= */
 if (!admin.apps.length) {
   try {
@@ -18,10 +18,10 @@ if (!admin.apps.length) {
         })
       });
 
-      console.log("🔥 Firebase initialized (ENV)");
+      console.log("🔥 Firebase initialized");
 
     } else {
-      console.log("❌ Firebase ENV variables missing");
+      console.log("⚠️ Firebase ENV missing");
     }
 
   } catch (err) {
@@ -30,45 +30,106 @@ if (!admin.apps.length) {
 }
 
 /* =========================
-   🔔 SEND NOTIFICATION
+   🔔 SEND NOTIFICATION (FINAL)
 ========================= */
-export const sendNotification = async (tokens = [], title, body) => {
+export const sendNotification = async (
+  tokens = [],
+  title = "Alert",
+  body = "",
+  extraData = {}
+) => {
   try {
     if (!tokens || tokens.length === 0) {
-      console.log("⚠️ No FCM tokens found");
+      console.log("⚠️ No FCM tokens");
       return;
     }
+
+    // 🔥 Ensure array
+    const tokenList = Array.isArray(tokens) ? tokens : [tokens];
 
     const message = {
       notification: {
         title,
         body
       },
-      tokens
+
+      data: {
+        click_action: "FLUTTER_NOTIFICATION_CLICK",
+        type: "SECURITY_ALERT",
+        ...Object.fromEntries(
+          Object.entries(extraData).map(([k, v]) => [k, String(v)])
+        )
+      },
+
+      android: {
+        priority: "high",
+        notification: {
+          sound: "default",
+          channelId: "security-alerts"
+        }
+      },
+
+      apns: {
+        payload: {
+          aps: {
+            sound: "default",
+            contentAvailable: true
+          }
+        }
+      },
+
+      tokens: tokenList
     };
 
     const response = await admin.messaging().sendEachForMulticast(message);
 
-    console.log("📲 Notification sent");
-    console.log("✅ Success:", response.successCount);
-    console.log("❌ Failed:", response.failureCount);
+    console.log("📲 Notifications sent");
+    console.log(`✅ Success: ${response.successCount}`);
+    console.log(`❌ Failed: ${response.failureCount}`);
 
     /* =========================
        🔥 HANDLE FAILED TOKENS
     ========================= */
     if (response.failureCount > 0) {
-      const failedTokens = [];
+      const invalidTokens = [];
 
       response.responses.forEach((res, idx) => {
         if (!res.success) {
-          failedTokens.push(tokens[idx]);
+          const errCode = res.error?.code;
+
+          // 🔥 detect invalid tokens
+          if (
+            errCode === "messaging/invalid-registration-token" ||
+            errCode === "messaging/registration-token-not-registered"
+          ) {
+            invalidTokens.push(tokenList[idx]);
+          }
         }
       });
 
-      console.log("⚠️ Invalid tokens:", failedTokens);
+      if (invalidTokens.length) {
+        console.log("⚠️ Remove invalid tokens:", invalidTokens);
+
+        // 👉 OPTIONAL: remove from DB (recommended)
+        // await User.updateMany(
+        //   { fcmToken: { $in: invalidTokens } },
+        //   { $unset: { fcmToken: "" } }
+        // );
+      }
     }
 
+    return {
+      success: true,
+      successCount: response.successCount,
+      failureCount: response.failureCount
+    };
+
   } catch (err) {
-    console.log("❌ Firebase error:", err.message);
+    console.log("❌ Firebase send error:", err.message);
+
+    return {
+      success: false,
+      error: err.message
+    };
   }
 };

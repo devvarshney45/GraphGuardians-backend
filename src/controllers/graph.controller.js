@@ -3,13 +3,14 @@ import Vulnerability from "../models/vulnerability.model.js";
 import Repo from "../models/repo.model.js";
 
 /* =========================
-   💀 FIND VULNERABLE CHAINS
+   💀 FIND VULNERABLE CHAINS (SMART)
 ========================= */
 const findVulnerableChains = (edges, vulns) => {
   const vulnSet = new Set(vulns.map(v => v.package));
 
   return edges.filter(e =>
-    vulnSet.has(e.from) || vulnSet.has(e.to)
+    e.type === "depends_on" && // 🔥 only dependency chain
+    (vulnSet.has(e.from) || vulnSet.has(e.to))
   );
 };
 
@@ -27,7 +28,7 @@ const getSeverityColor = (severity) => {
 };
 
 /* =========================
-   🚀 GET GRAPH (ULTRA)
+   🚀 GET GRAPH (ULTRA PRO MAX)
 ========================= */
 export const getGraph = async (req, res) => {
   try {
@@ -55,19 +56,23 @@ export const getGraph = async (req, res) => {
 
     const nodes = [];
     const edges = [];
+
     const nodeSet = new Set();
+    const edgeSet = new Set(); // 🔥 prevent duplicate edges
 
     /* =========================
        🟢 REPO NODE
     ========================= */
+    const repoIdStr = repo._id.toString();
+
     nodes.push({
-      id: repo._id.toString(),
+      id: repoIdStr,
       label: repo.name,
       type: "repo",
       size: 30
     });
 
-    nodeSet.add(repo._id.toString());
+    nodeSet.add(repoIdStr);
 
     /* =========================
        🟡 DEPENDENCIES
@@ -75,6 +80,7 @@ export const getGraph = async (req, res) => {
     deps.forEach(dep => {
       const depId = dep.name;
 
+      // ✅ add node
       if (!nodeSet.has(depId)) {
         nodes.push({
           id: depId,
@@ -85,20 +91,28 @@ export const getGraph = async (req, res) => {
         nodeSet.add(depId);
       }
 
-      // repo → dependency
-      edges.push({
-        from: repo._id.toString(),
-        to: depId,
-        type: "uses"
-      });
-
-      // dependency chain
-      if (dep.parent) {
+      // ✅ repo → dep edge
+      const edgeKey1 = `${repoIdStr}-${depId}-uses`;
+      if (!edgeSet.has(edgeKey1)) {
         edges.push({
-          from: dep.parent,
+          from: repoIdStr,
           to: depId,
-          type: "depends_on"
+          type: "uses"
         });
+        edgeSet.add(edgeKey1);
+      }
+
+      // ✅ dependency chain
+      if (dep.parent) {
+        const edgeKey2 = `${dep.parent}-${depId}-depends`;
+        if (!edgeSet.has(edgeKey2)) {
+          edges.push({
+            from: dep.parent,
+            to: depId,
+            type: "depends_on"
+          });
+          edgeSet.add(edgeKey2);
+        }
       }
     });
 
@@ -113,10 +127,12 @@ export const getGraph = async (req, res) => {
     };
 
     vulns.forEach(v => {
-      const vulnId = `${v.package}_${v.cve || Math.random()}`;
+      const vulnId = `${v.package}_${v.cve || "unknown"}`;
 
-      severityCount[v.severity] = (severityCount[v.severity] || 0) + 1;
+      severityCount[v.severity] =
+        (severityCount[v.severity] || 0) + 1;
 
+      // ✅ vuln node
       if (!nodeSet.has(vulnId)) {
         nodes.push({
           id: vulnId,
@@ -130,15 +146,20 @@ export const getGraph = async (req, res) => {
         nodeSet.add(vulnId);
       }
 
-      edges.push({
-        from: v.package,
-        to: vulnId,
-        type: "has_vulnerability"
-      });
+      // ✅ edge dep → vuln
+      const edgeKey3 = `${v.package}-${vulnId}-vuln`;
+      if (!edgeSet.has(edgeKey3)) {
+        edges.push({
+          from: v.package,
+          to: vulnId,
+          type: "has_vulnerability"
+        });
+        edgeSet.add(edgeKey3);
+      }
     });
 
     /* =========================
-       💀 CHAINS (KILLER FEATURE)
+       💀 CHAINS (USP FEATURE)
     ========================= */
     const chains = findVulnerableChains(edges, vulns);
 
@@ -157,17 +178,19 @@ export const getGraph = async (req, res) => {
     /* =========================
        🚀 RESPONSE
     ========================= */
-    res.json({
+    return res.json({
+      success: true,
       nodes,
       edges,
-      chains,   // 🔥 frontend highlight karega
-      stats     // 🔥 dashboard use karega
+      chains, // 💀 highlight in frontend
+      stats
     });
 
   } catch (err) {
     console.log("❌ Graph Error:", err.message);
 
-    res.status(500).json({
+    return res.status(500).json({
+      success: false,
       error: "Graph generation failed"
     });
   }

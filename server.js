@@ -5,16 +5,19 @@ import connectDB from "./src/config/db.js";
 import http from "http";
 import { Server } from "socket.io";
 
-// 🔐 Load env
+/* =========================
+   🔐 LOAD ENV (EARLY)
+========================= */
 dotenv.config();
 
 /* =========================
    🔥 GLOBAL VARS
 ========================= */
 const PORT = process.env.PORT || 5000;
+const CLIENT_URL = process.env.CLIENT_URL || "*";
 
 /* =========================
-   🔥 START SERVER FUNCTION
+   🚀 START SERVER FUNCTION
 ========================= */
 const startServer = async () => {
   try {
@@ -30,17 +33,16 @@ const startServer = async () => {
     const server = http.createServer(app);
 
     /* =========================
-       🔥 SOCKET.IO SETUP (PRODUCTION READY)
+       🔥 SOCKET.IO SETUP
     ========================= */
     const io = new Server(server, {
       cors: {
-        origin: process.env.CLIENT_URL || "*", // 🔥 production me restrict
+        origin: CLIENT_URL,
         methods: ["GET", "POST"],
         credentials: true,
       },
-
-      transports: ["websocket", "polling"], // 🔥 fallback support
-      pingTimeout: 60000, // 🔥 prevent disconnects
+      transports: ["websocket", "polling"],
+      pingTimeout: 60000,
       pingInterval: 25000,
     });
 
@@ -56,7 +58,7 @@ const startServer = async () => {
       console.log(`🔌 Client connected: ${socket.id}`);
 
       /* =========================
-         📦 JOIN ROOM (IMPORTANT)
+         📦 JOIN ROOM
       ========================= */
       socket.on("joinRepoRoom", (repoId) => {
         if (!repoId) return;
@@ -66,7 +68,7 @@ const startServer = async () => {
       });
 
       /* =========================
-         🚪 LEAVE ROOM (OPTIONAL)
+         🚪 LEAVE ROOM
       ========================= */
       socket.on("leaveRepoRoom", (repoId) => {
         socket.leave(repoId);
@@ -74,7 +76,7 @@ const startServer = async () => {
       });
 
       /* =========================
-         ❤️ HEARTBEAT (DEBUG)
+         ❤️ HEARTBEAT
       ========================= */
       socket.on("ping-check", () => {
         socket.emit("pong-check");
@@ -93,9 +95,16 @@ const startServer = async () => {
     });
 
     /* =========================
-       🚀 START SERVER
+       🧪 HEALTH CHECK (RENDER FIX)
     ========================= */
-    server.listen(PORT, () => {
+    app.get("/", (req, res) => {
+      res.send("🚀 GraphGuard Backend Running");
+    });
+
+    /* =========================
+       🚀 START SERVER (IMPORTANT FIX)
+    ========================= */
+    server.listen(PORT, "0.0.0.0", () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
     });
@@ -120,5 +129,7 @@ process.on("uncaughtException", (err) => {
   console.error("❌ Uncaught Exception:", err.message);
 });
 
-// 🚀 Start server
+/* =========================
+   🚀 START
+========================= */
 startServer();

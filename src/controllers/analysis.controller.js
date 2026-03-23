@@ -5,15 +5,13 @@ import Alert from "../models/alert.model.js";
 import ScanHistory from "../models/scanHistory.model.js";
 import User from "../models/user.model.js";
 
-import { fetchPackageJson } from "../services/github.service.js";
-import { extractDependencies } from "../utils/parser.util.js";
+import { fetchFileFromGitHub } from "../services/githubContent.service.js";
+import { buildTreeFromLockfile } from "../services/tree.service.js";
+
 import { checkVulnerabilities } from "../services/vulnerability.service.js";
 import { calculateRisk } from "../utils/risk.util.js";
 import { pushToNeo4j } from "../services/neo4j.service.js";
 import { sendNotification } from "../services/firebase.service.js";
-
-import { getDependencyTree } from "../services/dependencyTree.service.js";
-import { extractDependencyEdges } from "../utils/treeParser.util.js";
 
 import {
   findNewVulnerabilities,
@@ -21,6 +19,9 @@ import {
   generateAlerts
 } from "../utils/diff.util.js";
 
+/* =========================
+   🚀 ANALYZE REPO (FINAL)
+========================= */
 export const analyzeRepo = async (req, res) => {
   try {
     const safeRes = {
@@ -42,7 +43,7 @@ export const analyzeRepo = async (req, res) => {
 
     const repoIdStr = String(repoId);
 
-    /* ========================= 🔥 SET STATUS (START) ========================= */
+    /* ========================= 🔥 SET STATUS ========================= */
     await Repo.findByIdAndUpdate(repoId, {
       status: "scanning"
     });
@@ -51,30 +52,53 @@ export const analyzeRepo = async (req, res) => {
     const currentVersion = repo.scanCount || 0;
     const newVersion = currentVersion + 1;
 
-    console.log(`🚀 Scanning repo: ${repo.name}`);
+    console.log(`🚀 FAST SCAN START: ${repo.name}`);
 
-    /* ========================= FETCH PACKAGE ========================= */
-    const pkg = await fetchPackageJson(url, token);
+    /* ========================= 📥 FETCH FILES ========================= */
+    const [lockfile, pkg] = await Promise.all([
+      fetchFileFromGitHub(url, "package-lock.json", token),
+      fetchFileFromGitHub(url, "package.json", token)
+    ]);
+
     if (!pkg) {
       return response.status(400).json({
-        msg: "package.json not accessible"
+        msg: "package.json not found"
       });
     }
 
-    /* ========================= DEPENDENCIES ========================= */
-    const rawDeps = extractDependencies(pkg);
+    /* ========================= 🌳 BUILD TREE ========================= */
+    let tree = [];
 
-    const uniqueDeps = rawDeps.map(d => ({
+    if (lockfile && lockfile.dependencies) {
+      console.log("✅ Using LOCKFILE (accurate)");
+      tree = buildTreeFromLockfile(lockfile);
+    } else {
+      console.log("⚠️ No lockfile → fallback");
+      const deps = pkg.dependencies || {};
+
+      tree = Object.entries(deps).map(([name, version]) => ({
+        name,
+        version: version || "latest",
+        parent: null
+      }));
+    }
+
+    console.log(`🌳 Tree size: ${tree.length}`);
+
+    /* ========================= 📦 SAVE DEPENDENCIES ========================= */
+    const uniqueDeps = tree.map(d => ({
       repoId: repoIdStr,
       versionGroup: newVersion,
-      name: d.name.toLowerCase().trim(),
+      name: d.name.toLowerCase(),
       version: String(d.version || "unknown"),
-      type: d.type || "prod"
+      type: "prod"
     }));
 
-    await Dependency.insertMany(uniqueDeps, { ordered: false });
+    if (uniqueDeps.length) {
+      await Dependency.insertMany(uniqueDeps, { ordered: false });
+    }
 
-    /* ========================= VULNERABILITIES ========================= */
+    /* ========================= 🚨 VULNERABILITIES (PARALLEL) ========================= */
     const vulns = await checkVulnerabilities(uniqueDeps);
 
     const formattedVulns = vulns.map(v => ({
@@ -91,29 +115,28 @@ export const analyzeRepo = async (req, res) => {
       await Vulnerability.insertMany(formattedVulns, { ordered: false });
     }
 
-    /* ========================= ALERTS ========================= */
+    console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
+
+    /* ========================= 🔔 ALERTS ========================= */
     const alerts = generateAlerts(
       repoIdStr,
-      [],
-      []
+      findNewVulnerabilities([], formattedVulns),
+      findFixedVulnerabilities([], formattedVulns)
     );
 
     if (alerts.length) {
       await Alert.insertMany(alerts);
     }
 
-    /* ========================= TREE ========================= */
-    let cleanEdges = [];
+    /* ========================= 🔗 EDGES ========================= */
+    const cleanEdges = tree
+      .filter(d => d.parent)
+      .map(d => ({
+        from: d.parent,
+        to: d.name
+      }));
 
-    try {
-      const tree = await getDependencyTree(url, token);
-
-      if (tree) {
-        cleanEdges = extractDependencyEdges(tree);
-      }
-    } catch {}
-
-    /* ========================= NEO4J ========================= */
+    /* ========================= 🔥 NEO4J ========================= */
     await pushToNeo4j(
       repoIdStr,
       uniqueDeps,
@@ -121,7 +144,7 @@ export const analyzeRepo = async (req, res) => {
       cleanEdges
     );
 
-    /* ========================= RISK ========================= */
+    /* ========================= 📊 RISK ========================= */
     const risk = calculateRisk(formattedVulns);
 
     await ScanHistory.create({
@@ -146,13 +169,13 @@ export const analyzeRepo = async (req, res) => {
       { new: true }
     ).lean();
 
-    console.log("✅ Scan complete");
+    console.log("✅ FAST SCAN COMPLETE");
 
-    /* ========================= 🔥 SOCKET EMIT (FINAL FIX) ========================= */
+    /* ========================= 🔥 SOCKET EMIT ========================= */
     const io = req.app.get("io");
 
     if (io) {
-      io.to(repoIdStr).emit("scanComplete", {
+      io.to(repoIdStr).emit(`scan-${repoIdStr}`, {
         repo: updatedRepo,
         stats: {
           riskScore: risk,

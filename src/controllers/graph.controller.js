@@ -2,22 +2,52 @@ import Dependency from "../models/dependency.model.js";
 import Vulnerability from "../models/vulnerability.model.js";
 import Repo from "../models/repo.model.js";
 
+/* =========================
+   💀 FIND VULNERABLE CHAINS
+========================= */
+const findVulnerableChains = (edges, vulns) => {
+  const vulnSet = new Set(vulns.map(v => v.package));
+
+  return edges.filter(e =>
+    vulnSet.has(e.from) || vulnSet.has(e.to)
+  );
+};
+
+/* =========================
+   🎨 SEVERITY COLOR
+========================= */
+const getSeverityColor = (severity) => {
+  switch (severity) {
+    case "CRITICAL": return "#ff0000";
+    case "HIGH": return "#ff4d4d";
+    case "MEDIUM": return "#ffa500";
+    case "LOW": return "#ffff00";
+    default: return "#999";
+  }
+};
+
+/* =========================
+   🚀 GET GRAPH (ULTRA)
+========================= */
 export const getGraph = async (req, res) => {
   try {
     const { repoId } = req.params;
 
-    // 🔍 Repo check
+    /* =========================
+       🔍 Repo Check
+    ========================= */
     const repo = await Repo.findById(repoId).lean();
     if (!repo) {
       return res.status(404).json({ msg: "Repo not found" });
     }
 
-    // 🔐 Ownership check
     if (repo.userId.toString() !== req.user.id) {
       return res.status(403).json({ msg: "Unauthorized" });
     }
 
-    // ⚡ Parallel fetch
+    /* =========================
+       ⚡ Fetch Data
+    ========================= */
     const [deps, vulns] = await Promise.all([
       Dependency.find({ repoId }).lean(),
       Vulnerability.find({ repoId }).lean()
@@ -27,56 +57,78 @@ export const getGraph = async (req, res) => {
     const edges = [];
     const nodeSet = new Set();
 
-    // 🟢 Repo node
+    /* =========================
+       🟢 REPO NODE
+    ========================= */
     nodes.push({
       id: repo._id.toString(),
       label: repo.name,
-      type: "repo"
+      type: "repo",
+      size: 30
     });
 
-    // 🟡 Dependencies
+    nodeSet.add(repo._id.toString());
+
+    /* =========================
+       🟡 DEPENDENCIES
+    ========================= */
     deps.forEach(dep => {
-      if (!nodeSet.has(dep.name)) {
+      const depId = dep.name;
+
+      if (!nodeSet.has(depId)) {
         nodes.push({
-          id: dep.name,
+          id: depId,
           label: `${dep.name}@${dep.version}`,
-          type: "dependency"
+          type: "dependency",
+          size: 12
         });
-        nodeSet.add(dep.name);
+        nodeSet.add(depId);
       }
 
       // repo → dependency
       edges.push({
         from: repo._id.toString(),
-        to: dep.name,
+        to: depId,
         type: "uses"
       });
 
-      // 🔥 dependency chain (IMPORTANT)
+      // dependency chain
       if (dep.parent) {
         edges.push({
           from: dep.parent,
-          to: dep.name,
+          to: depId,
           type: "depends_on"
         });
       }
     });
 
-    // 🔴 Vulnerabilities
-    vulns.forEach(v => {
-      const vulnId = `${v.package}_${v.cve || "vuln"}`;
+    /* =========================
+       🔴 VULNERABILITIES
+    ========================= */
+    const severityCount = {
+      LOW: 0,
+      MEDIUM: 0,
+      HIGH: 0,
+      CRITICAL: 0
+    };
 
-      nodes.push({
-        id: vulnId,
-        label: v.package,
-        type: "vulnerability",
-        severity: v.severity,
-        color:
-          v.severity === "CRITICAL" ? "#ff0000" :
-          v.severity === "HIGH" ? "#ff4d4d" :
-          v.severity === "MEDIUM" ? "#ffa500" :
-          "#ffff00"
-      });
+    vulns.forEach(v => {
+      const vulnId = `${v.package}_${v.cve || Math.random()}`;
+
+      severityCount[v.severity] = (severityCount[v.severity] || 0) + 1;
+
+      if (!nodeSet.has(vulnId)) {
+        nodes.push({
+          id: vulnId,
+          label: `${v.package} (${v.severity})`,
+          type: "vulnerability",
+          severity: v.severity,
+          color: getSeverityColor(v.severity),
+          size: 18
+        });
+
+        nodeSet.add(vulnId);
+      }
 
       edges.push({
         from: v.package,
@@ -85,12 +137,38 @@ export const getGraph = async (req, res) => {
       });
     });
 
+    /* =========================
+       💀 CHAINS (KILLER FEATURE)
+    ========================= */
+    const chains = findVulnerableChains(edges, vulns);
+
+    /* =========================
+       📊 STATS
+    ========================= */
+    const stats = {
+      totalNodes: nodes.length,
+      totalEdges: edges.length,
+      dependencies: deps.length,
+      vulnerabilities: vulns.length,
+      severity: severityCount,
+      vulnerableChains: chains.length
+    };
+
+    /* =========================
+       🚀 RESPONSE
+    ========================= */
     res.json({
       nodes,
-      edges
+      edges,
+      chains,   // 🔥 frontend highlight karega
+      stats     // 🔥 dashboard use karega
     });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.log("❌ Graph Error:", err.message);
+
+    res.status(500).json({
+      error: "Graph generation failed"
+    });
   }
 };

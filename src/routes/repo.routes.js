@@ -3,7 +3,8 @@ import {
   addRepo,
   getRepos,
   getRepoById,
-  deleteRepo
+  deleteRepo,
+  getRepoDiff   // ✅ ADD THIS
 } from "../controllers/repo.controller.js";
 
 import { authMiddleware } from "../middleware/auth.middleware.js";
@@ -34,13 +35,17 @@ router.get("/", authMiddleware, getRepos);
 router.get("/:repoId", authMiddleware, getRepoById);
 
 /* =========================
+   🔥 GET REPO DIFF (FIX)
+========================= */
+router.get("/:repoId/diff", authMiddleware, getRepoDiff);
+
+/* =========================
    🗑️ DELETE REPO
 ========================= */
 router.delete("/:repoId", authMiddleware, deleteRepo);
 
 /* =========================
    ❤️ HEALTH CHECK (NEW 🔥)
-   👉 useful for testing server alive
 ========================= */
 router.get("/health/check", (req, res) => {
   res.json({

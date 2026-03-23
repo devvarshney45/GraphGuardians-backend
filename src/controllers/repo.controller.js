@@ -1,4 +1,5 @@
 import Repo from "../models/repo.model.js";
+import User from "../models/user.model.js"; // ✅ ADD THIS
 import axios from "axios";
 import { analyzeRepo } from "./analysis.controller.js";
 import { getInstallationToken } from "../services/githubApp.service.js";
@@ -78,16 +79,25 @@ export const addRepo = async (req, res) => {
     let token = null;
     let isAppToken = false;
 
-    if (req.user.installationId) {
+    /* ========================= FIX START 🔥 ========================= */
+    // ❗ Always fetch fresh user from DB
+    const fullUser = await User.findById(userId);
+
+    console.log("👤 USER:", fullUser?.email);
+    console.log("🔑 GitHub Token:", fullUser?.githubAccessToken);
+    console.log("📦 Installation ID:", fullUser?.installationId);
+
+    if (fullUser?.installationId) {
       try {
-        token = await getInstallationToken(req.user.installationId);
+        token = await getInstallationToken(fullUser.installationId);
         isAppToken = true;
       } catch {}
     }
 
-    if (!token && req.user.githubAccessToken) {
-      token = req.user.githubAccessToken;
+    if (!token && fullUser?.githubAccessToken) {
+      token = fullUser.githubAccessToken;
     }
+    /* ========================= FIX END 🔥 ========================= */
 
     if (!token) {
       return res.status(401).json({ msg: "GitHub not connected" });

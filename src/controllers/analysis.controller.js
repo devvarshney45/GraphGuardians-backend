@@ -3,6 +3,7 @@ import Dependency from "../models/dependency.model.js";
 import Vulnerability from "../models/vulnerability.model.js";
 import Alert from "../models/alert.model.js";
 import ScanHistory from "../models/scanHistory.model.js";
+import User from "../models/user.model.js"; // 🔥 NEW
 
 import { fetchFileFromGitHub } from "../services/githubContent.service.js";
 import { buildTreeFromLockfile } from "../services/dependencyTree.service.js";
@@ -11,6 +12,9 @@ import { checkVulnerabilities } from "../services/vulnerability.service.js";
 import { calculateRisk } from "../utils/risk.util.js";
 import { pushToNeo4j } from "../services/neo4j.service.js";
 
+import { generateAIInsights } from "../services/ai.service.js"; // 🔥 NEW
+import { sendNotification } from "../services/firebase.service.js"; // 🔥 NEW
+
 import {
   findNewVulnerabilities,
   findFixedVulnerabilities,
@@ -18,7 +22,7 @@ import {
 } from "../utils/diff.util.js";
 
 /* =========================
-   🚀 ANALYZE REPO (FINAL ULTRA)
+   🚀 ANALYZE REPO (FINAL ULTRA PRO MAX)
 ========================= */
 export const analyzeRepo = async (req, res) => {
   const TIMEOUT = 25000;
@@ -49,7 +53,7 @@ export const analyzeRepo = async (req, res) => {
 
     console.log(`🚀 SCAN START: ${repo.name}`);
 
-    /* ========================= 🔥 FETCH FILES (SMART BRANCH FIX) ========================= */
+    /* ========================= FETCH FILES ========================= */
     let lockfile = null;
     let pkg = null;
 
@@ -62,7 +66,7 @@ export const analyzeRepo = async (req, res) => {
       console.log("⚠️ GitHub fetch failed");
     }
 
-    /* ========================= ❗ NO PACKAGE.JSON ========================= */
+    /* ========================= NO PACKAGE ========================= */
     if (!pkg) {
       console.log("⚠️ No package.json → fallback");
 
@@ -79,7 +83,7 @@ export const analyzeRepo = async (req, res) => {
         { new: true }
       ).lean();
 
-      emitResult(req, repoIdStr, updatedRepo, 0, 0, 0);
+      emitResult(req, repoIdStr, updatedRepo, 0, 0, 0, []);
 
       return response.json({
         success: true,
@@ -87,7 +91,7 @@ export const analyzeRepo = async (req, res) => {
       });
     }
 
-    /* ========================= 🌳 TREE ========================= */
+    /* ========================= TREE ========================= */
     let tree = [];
 
     try {
@@ -108,7 +112,7 @@ export const analyzeRepo = async (req, res) => {
       console.log("⚠️ Tree build failed");
     }
 
-    /* ========================= 📦 UNIQUE DEPS ========================= */
+    /* ========================= UNIQUE DEPS ========================= */
     const seen = new Set();
 
     const uniqueDeps = tree
@@ -130,7 +134,7 @@ export const analyzeRepo = async (req, res) => {
 
     await Dependency.insertMany(uniqueDeps, { ordered: false }).catch(() => {});
 
-    /* ========================= 🚨 VULNERABILITIES ========================= */
+    /* ========================= VULNERABILITIES ========================= */
     let formattedVulns = [];
 
     try {
@@ -143,7 +147,8 @@ export const analyzeRepo = async (req, res) => {
         version: String(v.version || ""),
         severity: v.severity,
         cve: v.cve,
-        fix: v.fix
+        fix: v.fix,
+        description: v.description || "" // 🔥 IMPORTANT
       }));
 
       await Vulnerability.insertMany(formattedVulns, { ordered: false }).catch(() => {});
@@ -153,9 +158,11 @@ export const analyzeRepo = async (req, res) => {
 
     console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
 
-    /* ========================= 🔔 ALERTS ========================= */
+    /* ========================= ALERTS ========================= */
+    let alerts = [];
+
     try {
-      const alerts = generateAlerts(
+      alerts = generateAlerts(
         repoIdStr,
         findNewVulnerabilities([], formattedVulns),
         findFixedVulnerabilities([], formattedVulns)
@@ -164,7 +171,33 @@ export const analyzeRepo = async (req, res) => {
       await Alert.insertMany(alerts).catch(() => {});
     } catch {}
 
-    /* ========================= 🔗 GRAPH ========================= */
+    /* ========================= 🔥 AI INSIGHTS ========================= */
+    let aiInsights = [];
+
+    try {
+      aiInsights = await generateAIInsights(formattedVulns, uniqueDeps);
+    } catch {
+      console.log("⚠️ AI failed");
+    }
+
+    /* ========================= 🔥 MOBILE PUSH ========================= */
+    try {
+      const user = await User.findById(repo.userId);
+
+      if (user?.fcmToken && alerts.length > 0) {
+        await sendNotification(
+          user.fcmToken,
+          "🚨 Security Alert",
+          `${alerts.length} new vulnerabilities detected`
+        );
+
+        console.log("📱 Push sent");
+      }
+    } catch (err) {
+      console.log("❌ Push failed:", err.message);
+    }
+
+    /* ========================= GRAPH ========================= */
     const cleanEdges = tree
       .filter(d => d.parent)
       .map(d => ({
@@ -176,7 +209,7 @@ export const analyzeRepo = async (req, res) => {
       console.log("⚠️ Neo4j failed");
     });
 
-    /* ========================= 📊 RISK ========================= */
+    /* ========================= RISK ========================= */
     const risk = calculateRisk(formattedVulns);
 
     await ScanHistory.create({
@@ -203,11 +236,20 @@ export const analyzeRepo = async (req, res) => {
 
     console.log("✅ SCAN COMPLETE");
 
-    emitResult(req, repoIdStr, updatedRepo, risk, uniqueDeps.length, formattedVulns.length);
+    emitResult(
+      req,
+      repoIdStr,
+      updatedRepo,
+      risk,
+      uniqueDeps.length,
+      formattedVulns.length,
+      aiInsights // 🔥 SEND AI
+    );
 
     return response.json({
       success: true,
-      repo: updatedRepo
+      repo: updatedRepo,
+      aiInsights // 🔥 ALSO RETURN API
     });
   };
 
@@ -229,12 +271,12 @@ export const analyzeRepo = async (req, res) => {
       riskScore: 0
     });
 
-    emitResult(req, repoId, { name: "Timeout Repo" }, 0, 0, 0);
+    emitResult(req, repoId, { name: "Timeout Repo" }, 0, 0, 0, []);
   }
 };
 
-/* ========================= 🔥 SOCKET HELPER ========================= */
-const emitResult = (req, repoIdStr, repo, risk, deps, vulns) => {
+/* ========================= SOCKET HELPER ========================= */
+const emitResult = (req, repoIdStr, repo, risk, deps, vulns, aiInsights = []) => {
   const io = req.app.get("io");
 
   if (io) {
@@ -244,7 +286,8 @@ const emitResult = (req, repoIdStr, repo, risk, deps, vulns) => {
         riskScore: risk,
         dependencies: deps,
         vulnerabilities: vulns
-      }
+      },
+      aiInsights // 🔥 FRONTEND USE
     });
   }
 };

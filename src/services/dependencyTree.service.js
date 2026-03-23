@@ -5,16 +5,20 @@ import axios from "axios";
 ========================= */
 
 const parseRepo = (url) => {
-  const parts = url.split("github.com/")[1]?.split("/");
+  try {
+    const parts = url.split("github.com/")[1]?.split("/");
 
-  if (!parts || parts.length < 2) {
-    throw new Error("Invalid GitHub URL");
+    if (!parts || parts.length < 2) {
+      throw new Error("Invalid GitHub URL");
+    }
+
+    return {
+      owner: parts[0],
+      repo: parts[1].replace(".git", "")
+    };
+  } catch {
+    return {};
   }
-
-  return {
-    owner: parts[0],
-    repo: parts[1].replace(".git", "")
-  };
 };
 
 const getHeaders = (token) => ({
@@ -38,16 +42,16 @@ const fetchFile = async (owner, repo, filePath, token) => {
 
     return JSON.parse(content);
 
-  } catch (err) {
+  } catch {
     return null;
   }
 };
 
 /* =========================
-   🌳 BUILD TREE FROM LOCKFILE
+   🌳 BUILD TREE FROM LOCKFILE (🔥 EXPORT FIX)
 ========================= */
 
-const buildTreeFromLockfile = (lockfile) => {
+export const buildTreeFromLockfile = (lockfile) => {
   const tree = [];
   const visited = new Set();
 
@@ -82,8 +86,8 @@ const buildTreeFromLockfile = (lockfile) => {
    🌐 FALLBACK (NO LOCKFILE)
 ========================= */
 
-const buildFallbackTree = (pkg) => {
-  const deps = pkg.dependencies || {};
+export const buildFallbackTree = (pkg) => {
+  const deps = pkg?.dependencies || {};
 
   return Object.entries(deps).map(([name, version]) => ({
     name,
@@ -93,7 +97,7 @@ const buildFallbackTree = (pkg) => {
 };
 
 /* =========================
-   🚀 MAIN FUNCTION (FINAL)
+   🚀 MAIN FUNCTION
 ========================= */
 
 export const getDependencyTree = async (repoUrl, token = null) => {
@@ -102,8 +106,13 @@ export const getDependencyTree = async (repoUrl, token = null) => {
 
     const { owner, repo } = parseRepo(repoUrl);
 
+    if (!owner || !repo) {
+      console.log("❌ Invalid repo");
+      return null;
+    }
+
     /* =========================
-       📥 FETCH FILES
+       📥 FETCH FILES (PARALLEL)
     ========================= */
     const [lockfile, pkg] = await Promise.all([
       fetchFile(owner, repo, "package-lock.json", token),
@@ -111,8 +120,8 @@ export const getDependencyTree = async (repoUrl, token = null) => {
     ]);
 
     if (!pkg) {
-      console.log("❌ package.json not found");
-      return null;
+      console.log("⚠️ No package.json");
+      return [];
     }
 
     /* =========================
@@ -120,12 +129,11 @@ export const getDependencyTree = async (repoUrl, token = null) => {
     ========================= */
     let tree = [];
 
-    if (lockfile && lockfile.dependencies) {
-      console.log("✅ Using LOCKFILE (accurate + fast)");
+    if (lockfile?.dependencies) {
+      console.log("✅ LOCKFILE MODE (accurate + fast)");
       tree = buildTreeFromLockfile(lockfile);
-
     } else {
-      console.log("⚠️ No lockfile → fallback mode");
+      console.log("⚠️ FALLBACK MODE");
       tree = buildFallbackTree(pkg);
     }
 
@@ -135,6 +143,6 @@ export const getDependencyTree = async (repoUrl, token = null) => {
 
   } catch (err) {
     console.log("❌ Tree error:", err.message);
-    return null;
+    return [];
   }
 };

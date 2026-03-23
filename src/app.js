@@ -6,7 +6,9 @@ import morgan from "morgan";
 import connectDB from "./config/db.js";
 import { startCron } from "./jobs/cron.job.js";
 
-// 🔥 Routes
+/* =========================
+   🔥 ROUTES
+========================= */
 import authRoutes from "./routes/auth.routes.js";
 import repoRoutes from "./routes/repo.routes.js";
 import analysisRoutes from "./routes/analysis.routes.js";
@@ -20,7 +22,11 @@ import fixRoutes from "./routes/fix.routes.js";
 import reportRoutes from "./routes/report.routes.js";
 import scanRoutes from "./routes/scan.routes.js";
 import repoInsightsRoutes from "./routes/repoInsights.routes.js";
+import chatRoutes from "./routes/chat.routes.js"; // 🔥 NEW (AI CHAT)
 
+/* =========================
+   🛡️ MIDDLEWARE
+========================= */
 import { errorMiddleware } from "./middleware/error.middleware.js";
 
 const app = express();
@@ -49,9 +55,7 @@ startCron();
 app.use("/api/auth", authRoutes);
 app.use("/api/repos", repoRoutes);
 
-// ✅ FIXED HERE
 app.use("/api/analysis", analysisRoutes);
-
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/vulnerabilities", vulnerabilityRoutes);
 app.use("/api/alerts", alertRoutes);
@@ -64,13 +68,18 @@ app.use("/api/scan-history", scanRoutes);
 app.use("/api/repos", repoInsightsRoutes);
 
 /* =========================
+   🤖 AI CHAT ROUTE
+========================= */
+app.use("/api/chat", chatRoutes); // 🔥 ADD THIS
+
+/* =========================
    🧪 HEALTH CHECK
 ========================= */
 app.get("/api/health", (req, res) => {
   res.json({
     status: "OK",
     service: "GraphGuard Backend",
-    version: "1.0.0",
+    version: "2.0.0", // 🔥 upgraded
     time: new Date()
   });
 });
@@ -80,6 +89,7 @@ app.get("/api/health", (req, res) => {
 ========================= */
 app.use((req, res) => {
   res.status(404).json({
+    success: false,
     msg: "Route not found"
   });
 });

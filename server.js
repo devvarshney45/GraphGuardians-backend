@@ -1,20 +1,25 @@
-import app from "./src/app.js";
 import dotenv from "dotenv";
+dotenv.config(); // ✅ FIX: env load first
+
+import app from "./src/app.js";
 import connectDB from "./src/config/db.js";
 
 import http from "http";
 import { Server } from "socket.io";
+import cors from "cors";
 
 /* =========================
-   🔐 LOAD ENV (EARLY)
+   🌍 GLOBAL CORS (FIX 🔥)
 ========================= */
-dotenv.config();
+app.use(cors({
+  origin: true, // ✅ allow all origins
+  credentials: true,
+}));
 
 /* =========================
    🔥 GLOBAL VARS
 ========================= */
 const PORT = process.env.PORT || 5000;
-const CLIENT_URL = process.env.CLIENT_URL || "*";
 
 /* =========================
    🚀 START SERVER FUNCTION
@@ -33,11 +38,11 @@ const startServer = async () => {
     const server = http.createServer(app);
 
     /* =========================
-       🔥 SOCKET.IO SETUP
+       🔥 SOCKET.IO SETUP (FIXED 🔥)
     ========================= */
     const io = new Server(server, {
       cors: {
-        origin: CLIENT_URL,
+        origin: "*", // ✅ allow all
         methods: ["GET", "POST"],
         credentials: true,
       },
@@ -95,14 +100,14 @@ const startServer = async () => {
     });
 
     /* =========================
-       🧪 HEALTH CHECK (RENDER FIX)
+       🧪 HEALTH CHECK
     ========================= */
     app.get("/", (req, res) => {
       res.send("🚀 GraphGuard Backend Running");
     });
 
     /* =========================
-       🚀 START SERVER (IMPORTANT FIX)
+       🚀 START SERVER
     ========================= */
     server.listen(PORT, "0.0.0.0", () => {
       console.log(`🚀 Server running on port ${PORT}`);
@@ -118,13 +123,10 @@ const startServer = async () => {
 /* =========================
    ⚠️ GLOBAL ERROR HANDLING
 ========================= */
-
-// 🔥 Promise errors
 process.on("unhandledRejection", (err) => {
   console.error("❌ Unhandled Rejection:", err.message);
 });
 
-// 🔥 Sync errors
 process.on("uncaughtException", (err) => {
   console.error("❌ Uncaught Exception:", err.message);
 });

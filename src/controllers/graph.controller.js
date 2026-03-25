@@ -8,9 +8,10 @@ import Repo from "../models/repo.model.js";
 const findVulnerableChains = (edges, vulns) => {
   const vulnSet = new Set(vulns.map(v => v.package));
 
-  return edges.filter(e =>
-    e.type === "depends_on" && // 🔥 only dependency chain
-    (vulnSet.has(e.from) || vulnSet.has(e.to))
+  return edges.filter(
+    (e) =>
+      e.type === "depends_on" &&
+      (vulnSet.has(e.from) || vulnSet.has(e.to))
   );
 };
 
@@ -28,7 +29,7 @@ const getSeverityColor = (severity) => {
 };
 
 /* =========================
-   🚀 GET GRAPH (ULTRA PRO MAX)
+   🚀 GET GRAPH (ULTRA PRO MAX - FINAL)
 ========================= */
 export const getGraph = async (req, res) => {
   try {
@@ -46,25 +47,27 @@ export const getGraph = async (req, res) => {
       return res.status(403).json({ msg: "Unauthorized" });
     }
 
+    const repoIdStr = repo._id.toString();
+
     /* =========================
-       ⚡ Fetch Data
+       🔥 LATEST VERSION ONLY (IMPORTANT FIX)
     ========================= */
+    const latestVersion = repo.scanCount;
+
     const [deps, vulns] = await Promise.all([
-      Dependency.find({ repoId }).lean(),
-      Vulnerability.find({ repoId }).lean()
+      Dependency.find({ repoId, versionGroup: latestVersion }).lean(),
+      Vulnerability.find({ repoId, versionGroup: latestVersion }).lean()
     ]);
 
     const nodes = [];
     const edges = [];
 
     const nodeSet = new Set();
-    const edgeSet = new Set(); // 🔥 prevent duplicate edges
+    const edgeSet = new Set();
 
     /* =========================
        🟢 REPO NODE
     ========================= */
-    const repoIdStr = repo._id.toString();
-
     nodes.push({
       id: repoIdStr,
       label: repo.name,
@@ -80,7 +83,6 @@ export const getGraph = async (req, res) => {
     deps.forEach(dep => {
       const depId = dep.name;
 
-      // ✅ add node
       if (!nodeSet.has(depId)) {
         nodes.push({
           id: depId,
@@ -91,7 +93,7 @@ export const getGraph = async (req, res) => {
         nodeSet.add(depId);
       }
 
-      // ✅ repo → dep edge
+      // repo → dependency
       const edgeKey1 = `${repoIdStr}-${depId}-uses`;
       if (!edgeSet.has(edgeKey1)) {
         edges.push({
@@ -102,7 +104,7 @@ export const getGraph = async (req, res) => {
         edgeSet.add(edgeKey1);
       }
 
-      // ✅ dependency chain
+      // dependency chain
       if (dep.parent) {
         const edgeKey2 = `${dep.parent}-${depId}-depends`;
         if (!edgeSet.has(edgeKey2)) {
@@ -132,7 +134,6 @@ export const getGraph = async (req, res) => {
       severityCount[v.severity] =
         (severityCount[v.severity] || 0) + 1;
 
-      // ✅ vuln node
       if (!nodeSet.has(vulnId)) {
         nodes.push({
           id: vulnId,
@@ -146,7 +147,6 @@ export const getGraph = async (req, res) => {
         nodeSet.add(vulnId);
       }
 
-      // ✅ edge dep → vuln
       const edgeKey3 = `${v.package}-${vulnId}-vuln`;
       if (!edgeSet.has(edgeKey3)) {
         edges.push({
@@ -167,6 +167,7 @@ export const getGraph = async (req, res) => {
        📊 STATS
     ========================= */
     const stats = {
+      version: latestVersion,
       totalNodes: nodes.length,
       totalEdges: edges.length,
       dependencies: deps.length,
@@ -180,9 +181,10 @@ export const getGraph = async (req, res) => {
     ========================= */
     return res.json({
       success: true,
+      version: latestVersion,
       nodes,
       edges,
-      chains, // 💀 highlight in frontend
+      chains,
       stats
     });
 

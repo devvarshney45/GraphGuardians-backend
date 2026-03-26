@@ -16,7 +16,7 @@ const getSeverityColor = (severity) => {
 };
 
 /* =========================
-   🚀 GET GRAPH (TREE FIXED)
+   🚀 GET GRAPH (FINAL FIXED TREE)
 ========================= */
 export const getGraph = async (req, res) => {
   try {
@@ -42,8 +42,8 @@ export const getGraph = async (req, res) => {
       Vulnerability.find({ repoId, versionGroup: latestVersion }).lean()
     ]);
 
-    const nodes = [];
-    const edges = [];
+    let nodes = [];
+    let edges = [];
 
     const nodeSet = new Set();
     const edgeSet = new Set();
@@ -51,61 +51,49 @@ export const getGraph = async (req, res) => {
     /* =========================
        🟢 REPO NODE
     ========================= */
-    nodes.push({
+    const repoNode = {
       id: repoIdStr,
       label: repo.name,
       type: "repo",
       size: 30
-    });
+    };
 
+    nodes.push(repoNode);
     nodeSet.add(repoIdStr);
 
     /* =========================
-       🟡 DEPENDENCIES (TREE STRUCTURE)
+       🟡 DEPENDENCY NODES (FIXED 🔥)
     ========================= */
-    deps.forEach(dep => {
-      const depId = dep.name;
+    const dependencyNodes = deps.map(dep => ({
+      id: dep.name,
+      label: dep.name,
+      type: "dependency",
+      size: 22
+    }));
 
-      if (!nodeSet.has(depId)) {
-        nodes.push({
-          id: depId,
-          label: `${dep.name}@${dep.version}`,
-          type: "dependency",
-          size: 14
+    dependencyNodes.forEach(dep => {
+      if (!nodeSet.has(dep.id)) {
+        nodes.push(dep);
+        nodeSet.add(dep.id);
+      }
+
+      // Repo → Dependency edge
+      const edgeKey = `${repoIdStr}-${dep.id}`;
+      if (!edgeSet.has(edgeKey)) {
+        edges.push({
+          from: repoIdStr,
+          to: dep.id,
+          type: "root"
         });
-        nodeSet.add(depId);
-      }
-
-      // ROOT DEPENDENCY (repo → dep)
-      if (!dep.parent) {
-        const edgeKey = `${repoIdStr}-${depId}`;
-        if (!edgeSet.has(edgeKey)) {
-          edges.push({
-            from: repoIdStr,
-            to: depId,
-            type: "root"
-          });
-          edgeSet.add(edgeKey);
-        }
-      }
-
-      // NESTED DEPENDENCY (dep → child dep)
-      if (dep.parent) {
-        const edgeKey = `${dep.parent}-${depId}`;
-        if (!edgeSet.has(edgeKey)) {
-          edges.push({
-            from: dep.parent,
-            to: depId,
-            type: "child"
-          });
-          edgeSet.add(edgeKey);
-        }
+        edgeSet.add(edgeKey);
       }
     });
 
     /* =========================
-       🔴 VULNERABILITIES (GROUPED UNDER DEP)
+       🔴 VULNERABILITY NODES
     ========================= */
+    const vulnerabilityNodes = [];
+
     const severityCount = {
       LOW: 0,
       MEDIUM: 0,
@@ -119,20 +107,22 @@ export const getGraph = async (req, res) => {
       severityCount[v.severity] =
         (severityCount[v.severity] || 0) + 1;
 
-      if (!nodeSet.has(vulnId)) {
-        nodes.push({
-          id: vulnId,
-          label: `${v.cve || "No CVE"}`,
-          type: "vulnerability",
-          severity: v.severity,
-          color: getSeverityColor(v.severity),
-          size: 18
-        });
+      const vulnNode = {
+        id: vulnId,
+        label: v.cve || "No CVE",
+        type: "vulnerability",
+        severity: v.severity,
+        color: getSeverityColor(v.severity),
+        size: 18
+      };
 
+      if (!nodeSet.has(vulnId)) {
+        vulnerabilityNodes.push(vulnNode);
+        nodes.push(vulnNode);
         nodeSet.add(vulnId);
       }
 
-      // DEPENDENCY → VULNERABILITY (IMPORTANT FIX)
+      // Dependency → Vulnerability edge (🔥 MAIN FIX)
       const edgeKey = `${v.package}-${vulnId}`;
       if (!edgeSet.has(edgeKey)) {
         edges.push({
@@ -151,8 +141,8 @@ export const getGraph = async (req, res) => {
       version: latestVersion,
       totalNodes: nodes.length,
       totalEdges: edges.length,
-      dependencies: deps.length,
-      vulnerabilities: vulns.length,
+      dependencies: dependencyNodes.length,
+      vulnerabilities: vulnerabilityNodes.length,
       severity: severityCount
     };
 

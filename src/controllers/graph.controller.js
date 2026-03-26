@@ -3,19 +3,6 @@ import Vulnerability from "../models/vulnerability.model.js";
 import Repo from "../models/repo.model.js";
 
 /* =========================
-   💀 FIND VULNERABLE CHAINS (SMART)
-========================= */
-const findVulnerableChains = (edges, vulns) => {
-  const vulnSet = new Set(vulns.map(v => v.package));
-
-  return edges.filter(
-    (e) =>
-      e.type === "depends_on" &&
-      (vulnSet.has(e.from) || vulnSet.has(e.to))
-  );
-};
-
-/* =========================
    🎨 SEVERITY COLOR
 ========================= */
 const getSeverityColor = (severity) => {
@@ -29,7 +16,7 @@ const getSeverityColor = (severity) => {
 };
 
 /* =========================
-   🚀 GET GRAPH (ULTRA PRO MAX - FINAL)
+   🚀 GET GRAPH (TREE FIXED)
 ========================= */
 export const getGraph = async (req, res) => {
   try {
@@ -48,10 +35,6 @@ export const getGraph = async (req, res) => {
     }
 
     const repoIdStr = repo._id.toString();
-
-    /* =========================
-       🔥 LATEST VERSION ONLY (IMPORTANT FIX)
-    ========================= */
     const latestVersion = repo.scanCount;
 
     const [deps, vulns] = await Promise.all([
@@ -78,7 +61,7 @@ export const getGraph = async (req, res) => {
     nodeSet.add(repoIdStr);
 
     /* =========================
-       🟡 DEPENDENCIES
+       🟡 DEPENDENCIES (TREE STRUCTURE)
     ========================= */
     deps.forEach(dep => {
       const depId = dep.name;
@@ -88,38 +71,40 @@ export const getGraph = async (req, res) => {
           id: depId,
           label: `${dep.name}@${dep.version}`,
           type: "dependency",
-          size: 12
+          size: 14
         });
         nodeSet.add(depId);
       }
 
-      // repo → dependency
-      const edgeKey1 = `${repoIdStr}-${depId}-uses`;
-      if (!edgeSet.has(edgeKey1)) {
-        edges.push({
-          from: repoIdStr,
-          to: depId,
-          type: "uses"
-        });
-        edgeSet.add(edgeKey1);
+      // ROOT DEPENDENCY (repo → dep)
+      if (!dep.parent) {
+        const edgeKey = `${repoIdStr}-${depId}`;
+        if (!edgeSet.has(edgeKey)) {
+          edges.push({
+            from: repoIdStr,
+            to: depId,
+            type: "root"
+          });
+          edgeSet.add(edgeKey);
+        }
       }
 
-      // dependency chain
+      // NESTED DEPENDENCY (dep → child dep)
       if (dep.parent) {
-        const edgeKey2 = `${dep.parent}-${depId}-depends`;
-        if (!edgeSet.has(edgeKey2)) {
+        const edgeKey = `${dep.parent}-${depId}`;
+        if (!edgeSet.has(edgeKey)) {
           edges.push({
             from: dep.parent,
             to: depId,
-            type: "depends_on"
+            type: "child"
           });
-          edgeSet.add(edgeKey2);
+          edgeSet.add(edgeKey);
         }
       }
     });
 
     /* =========================
-       🔴 VULNERABILITIES
+       🔴 VULNERABILITIES (GROUPED UNDER DEP)
     ========================= */
     const severityCount = {
       LOW: 0,
@@ -129,7 +114,7 @@ export const getGraph = async (req, res) => {
     };
 
     vulns.forEach(v => {
-      const vulnId = `${v.package}_${v.cve || "unknown"}`;
+      const vulnId = `${v.package}_${v.cve || Math.random()}`;
 
       severityCount[v.severity] =
         (severityCount[v.severity] || 0) + 1;
@@ -137,7 +122,7 @@ export const getGraph = async (req, res) => {
       if (!nodeSet.has(vulnId)) {
         nodes.push({
           id: vulnId,
-          label: `${v.package} (${v.severity})`,
+          label: `${v.cve || "No CVE"}`,
           type: "vulnerability",
           severity: v.severity,
           color: getSeverityColor(v.severity),
@@ -147,21 +132,17 @@ export const getGraph = async (req, res) => {
         nodeSet.add(vulnId);
       }
 
-      const edgeKey3 = `${v.package}-${vulnId}-vuln`;
-      if (!edgeSet.has(edgeKey3)) {
+      // DEPENDENCY → VULNERABILITY (IMPORTANT FIX)
+      const edgeKey = `${v.package}-${vulnId}`;
+      if (!edgeSet.has(edgeKey)) {
         edges.push({
           from: v.package,
           to: vulnId,
-          type: "has_vulnerability"
+          type: "vuln"
         });
-        edgeSet.add(edgeKey3);
+        edgeSet.add(edgeKey);
       }
     });
-
-    /* =========================
-       💀 CHAINS (USP FEATURE)
-    ========================= */
-    const chains = findVulnerableChains(edges, vulns);
 
     /* =========================
        📊 STATS
@@ -172,8 +153,7 @@ export const getGraph = async (req, res) => {
       totalEdges: edges.length,
       dependencies: deps.length,
       vulnerabilities: vulns.length,
-      severity: severityCount,
-      vulnerableChains: chains.length
+      severity: severityCount
     };
 
     /* =========================
@@ -184,7 +164,6 @@ export const getGraph = async (req, res) => {
       version: latestVersion,
       nodes,
       edges,
-      chains,
       stats
     });
 

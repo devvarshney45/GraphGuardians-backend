@@ -3,7 +3,6 @@ import axios from "axios";
 /* =========================
    🔧 HELPERS
 ========================= */
-
 const parseRepo = (url) => {
   try {
     const parts = url.split("github.com/")[1]?.split("/");
@@ -27,9 +26,8 @@ const getHeaders = (token) => ({
 });
 
 /* =========================
-   📥 FETCH FILE FROM GITHUB
+   📥 FETCH FILE
 ========================= */
-
 const fetchFile = async (owner, repo, filePath, token) => {
   try {
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
@@ -41,16 +39,14 @@ const fetchFile = async (owner, repo, filePath, token) => {
     const content = Buffer.from(res.data.content, "base64").toString("utf-8");
 
     return JSON.parse(content);
-
   } catch {
     return null;
   }
 };
 
 /* =========================
-   🌳 BUILD TREE FROM LOCKFILE (🔥 EXPORT FIX)
+   🌳 TREE BUILDER (FIXED)
 ========================= */
-
 export const buildTreeFromLockfile = (lockfile) => {
   const tree = [];
   const visited = new Set();
@@ -83,9 +79,8 @@ export const buildTreeFromLockfile = (lockfile) => {
 };
 
 /* =========================
-   🌐 FALLBACK (NO LOCKFILE)
+   🌐 FALLBACK
 ========================= */
-
 export const buildFallbackTree = (pkg) => {
   const deps = pkg?.dependencies || {};
 
@@ -97,9 +92,8 @@ export const buildFallbackTree = (pkg) => {
 };
 
 /* =========================
-   🚀 MAIN FUNCTION
+   🚀 MAIN
 ========================= */
-
 export const getDependencyTree = async (repoUrl, token = null) => {
   try {
     console.log("⚡ FAST TREE START");
@@ -108,12 +102,9 @@ export const getDependencyTree = async (repoUrl, token = null) => {
 
     if (!owner || !repo) {
       console.log("❌ Invalid repo");
-      return null;
+      return [];
     }
 
-    /* =========================
-       📥 FETCH FILES (PARALLEL)
-    ========================= */
     const [lockfile, pkg] = await Promise.all([
       fetchFile(owner, repo, "package-lock.json", token),
       fetchFile(owner, repo, "package.json", token)
@@ -124,13 +115,10 @@ export const getDependencyTree = async (repoUrl, token = null) => {
       return [];
     }
 
-    /* =========================
-       🌳 TREE LOGIC
-    ========================= */
     let tree = [];
 
     if (lockfile?.dependencies) {
-      console.log("✅ LOCKFILE MODE (accurate + fast)");
+      console.log("✅ LOCKFILE MODE");
       tree = buildTreeFromLockfile(lockfile);
     } else {
       console.log("⚠️ FALLBACK MODE");

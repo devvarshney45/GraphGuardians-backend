@@ -12,9 +12,8 @@ export const pushToNeo4j = async (
     console.log("🧠 Neo4j Sync Started");
 
     /* =========================
-       🔥 STRICT CLEAN (ULTRA SAFE)
+       🔥 SAFE DATA
     ========================= */
-
     const safeDeps = deps
       .filter(d => d && typeof d.name === "string")
       .map(d => ({
@@ -38,15 +37,7 @@ export const pushToNeo4j = async (
       }));
 
     /* =========================
-       ROOT
-    ========================= */
-    const ROOT =
-      safeEdges.length > 0
-        ? safeEdges[0].from
-        : safeDeps[0]?.name || "root";
-
-    /* =========================
-       CLEAN OLD GRAPH
+       🧹 CLEAN OLD GRAPH
     ========================= */
     await session.run(
       `MATCH (r:Repo {id: $repoId})-[*]->(n) DETACH DELETE n`,
@@ -54,7 +45,7 @@ export const pushToNeo4j = async (
     );
 
     /* =========================
-       CREATE REPO
+       🧱 CREATE REPO NODE
     ========================= */
     await session.run(
       `MERGE (r:Repo {id: $repoId})`,
@@ -62,84 +53,58 @@ export const pushToNeo4j = async (
     );
 
     /* =========================
-       ROOT NODE
+       📦 CREATE ALL PACKAGES (BATCH)
     ========================= */
     await session.run(
-      `MERGE (root:Package {name: $root})`,
-      { root: ROOT }
+      `
+      UNWIND $deps AS dep
+      MERGE (p:Package {name: dep.name})
+      SET p.version = dep.version
+      `,
+      { deps: safeDeps }
     );
 
+    /* =========================
+       🔗 CONNECT REPO → PACKAGES
+    ========================= */
     await session.run(
       `
       MATCH (r:Repo {id: $repoId})
-      MATCH (root:Package {name: $root})
-      MERGE (r)-[:USES]->(root)
+      UNWIND $deps AS dep
+      MATCH (p:Package {name: dep.name})
+      MERGE (r)-[:USES]->(p)
       `,
-      {
-        repoId: String(repoId),
-        root: ROOT
-      }
+      { repoId: String(repoId), deps: safeDeps }
     );
 
     /* =========================
-       📦 PACKAGES (SAFE LOOP)
+       🔗 EDGES (SAFE + AUTO NODE)
     ========================= */
-    for (const dep of safeDeps) {
-      if (!dep.name) continue;
-
-      await session.run(
-        `
-        MERGE (p:Package {name: $name})
-        SET p.version = $version
-        `,
-        {
-          name: dep.name,
-          version: dep.version
-        }
-      );
-    }
-
-    /* =========================
-       🔗 EDGES (SAFE LOOP)
-    ========================= */
-    for (const edge of safeEdges) {
-      if (!edge.from || !edge.to) continue;
-
-      await session.run(
-        `
-        MATCH (a:Package {name: $from})
-        MATCH (b:Package {name: $to})
-        MERGE (a)-[:DEPENDS_ON]->(b)
-        `,
-        {
-          from: edge.from,
-          to: edge.to
-        }
-      );
-    }
+    await session.run(
+      `
+      UNWIND $edges AS edge
+      MERGE (a:Package {name: edge.from})
+      MERGE (b:Package {name: edge.to})
+      MERGE (a)-[:DEPENDS_ON]->(b)
+      `,
+      { edges: safeEdges }
+    );
 
     console.log(`🔗 Dependency edges inserted: ${safeEdges.length}`);
 
     /* =========================
-       🚨 VULNERABILITIES (SAFE LOOP)
+       🚨 VULNERABILITIES (BATCH)
     ========================= */
-    for (const v of safeVulns) {
-      if (!v.package) continue;
-
-      await session.run(
-        `
-        MATCH (p:Package {name: $package})
-        MERGE (vul:Vulnerability {id: $id})
-        SET vul.severity = $severity
-        MERGE (p)-[:HAS_VULN]->(vul)
-        `,
-        {
-          package: v.package,
-          id: v.id,
-          severity: v.severity
-        }
-      );
-    }
+    await session.run(
+      `
+      UNWIND $vulns AS v
+      MATCH (p:Package {name: v.package})
+      MERGE (vul:Vulnerability {id: v.id})
+      SET vul.severity = v.severity
+      MERGE (p)-[:HAS_VULN]->(vul)
+      `,
+      { vulns: safeVulns }
+    );
 
     console.log(`🚨 Vulnerabilities linked: ${safeVulns.length}`);
 

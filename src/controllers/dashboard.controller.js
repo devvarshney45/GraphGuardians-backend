@@ -25,7 +25,6 @@ export const getDashboard = async (req, res) => {
 
     /* =========================
        🚀 EARLY RETURN (IMPORTANT FIX)
-       👉 scan chal raha ho to heavy queries skip
     ========================= */
     if (repo.status !== "scanned") {
       return res.json({
@@ -51,7 +50,7 @@ export const getDashboard = async (req, res) => {
     const prevVersion = latestVersion > 1 ? latestVersion - 1 : null;
 
     /* =========================
-       ⚡ Parallel Queries (OPTIMIZED)
+       ⚡ Parallel Queries
     ========================= */
     const [dependencies, vulnerabilities, alerts] = await Promise.all([
       Dependency.find({
@@ -70,8 +69,15 @@ export const getDashboard = async (req, res) => {
         .lean()
     ]);
 
-    const dependencyCount = dependencies.length;
+    /* =========================
+       🔥 FIX: DEPENDENCY COUNT LOGIC
+    ========================= */
     const vulnCount = vulnerabilities.length;
+
+    const dependencyCount =
+      dependencies.length > 0
+        ? dependencies.length
+        : new Set(vulnerabilities.map(v => v.package)).size;
 
     /* =========================
        📊 Severity Count

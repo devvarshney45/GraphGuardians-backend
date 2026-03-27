@@ -120,7 +120,7 @@ export const githubCallback = async (req, res) => {
     console.log("📥 GitHub Callback HIT");
     console.log("Query:", req.query);
 
-    const { code, state } = req.query; // 🔥 state = JWT
+    const { code } = req.query;
 
     if (!code) {
       console.log("❌ No code received");
@@ -163,45 +163,11 @@ export const githubCallback = async (req, res) => {
 
     console.log("👤 GitHub User:", githubUsername);
 
-    const FRONTEND = process.env.FRONTEND_URL || "http://localhost:5173";
-
-    /* =========================
-       🔥 STEP 1: CHECK EXISTING LOGIN USER (JWT)
-    ========================= */
-    let existingUser = null;
-
-    if (state) {
-      try {
-        const decoded = jwt.verify(state, process.env.JWT_SECRET);
-        existingUser = await User.findById(decoded.id);
-      } catch (err) {
-        console.log("❌ Invalid JWT in state");
-      }
-    }
-
-    /* =========================
-       🔥 STEP 2: LINK WITH EXISTING USER
-    ========================= */
-    if (existingUser) {
-      existingUser.githubId = githubUser.id;
-      existingUser.githubUsername = githubUsername;
-      existingUser.githubAccessToken = accessToken;
-      existingUser.avatar = githubUser.avatar_url;
-
-      await existingUser.save();
-
-      console.log("✅ GitHub linked to existing user");
-
-      const token = generateToken(existingUser._id);
-
-      return res.redirect(`${FRONTEND}/auth/success?token=${token}`);
-    }
-
-    /* =========================
-       🆕 FALLBACK (NO LOGIN → CREATE USER)
-    ========================= */
     let user = await User.findOne({ githubId: githubUser.id });
 
+    /* =========================
+       🆕 CREATE USER
+    ========================= */
     if (!user) {
       user = await User.create({
         name: githubUser.name || githubUser.login,
@@ -213,19 +179,26 @@ export const githubCallback = async (req, res) => {
       });
 
       console.log("🆕 New GitHub user created");
-    } else {
+    }
+
+    /* =========================
+       🔄 UPDATE USER
+    ========================= */
+    else {
       user.githubAccessToken = accessToken;
       user.githubUsername = githubUsername;
       user.avatar = githubUser.avatar_url;
       await user.save();
 
-      console.log("🔄 Existing GitHub user updated");
+      console.log("🔄 Existing user updated");
     }
 
     /* =========================
        🔐 TOKEN + REDIRECT
     ========================= */
     const token = generateToken(user._id);
+
+    const FRONTEND = process.env.FRONTEND_URL || "http://localhost:5173";
 
     const redirectUrl = `${FRONTEND}/auth/success?token=${token}`;
 

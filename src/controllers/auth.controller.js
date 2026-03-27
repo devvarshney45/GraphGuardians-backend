@@ -109,7 +109,9 @@ export const login = async (req, res) => {
 export const githubLogin = (req, res) => {
   console.log("🚀 GitHub OAuth started");
 
-  const redirectUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&scope=repo`;
+  const state = req.query.state || "web"; // 🔥 web/app पहचान
+
+  const redirectUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&scope=repo&state=${state}`;
 
   res.redirect(redirectUrl);
 };
@@ -120,7 +122,7 @@ export const githubCallback = async (req, res) => {
     console.log("📥 GitHub Callback HIT");
     console.log("Query:", req.query);
 
-    const { code } = req.query;
+    const { code, state } = req.query;
 
     if (!code) {
       console.log("❌ No code received");
@@ -162,8 +164,20 @@ export const githubCallback = async (req, res) => {
     const githubUsername = githubUser.login.toLowerCase();
 
     console.log("👤 GitHub User:", githubUsername);
+    console.log("📧 GitHub Email:", githubUser.email);
 
-    let user = await User.findOne({ githubId: githubUser.id });
+    /* =========================
+       🔥 FIND USER (EMAIL + ID)
+    ========================= */
+    let user = null;
+
+    if (githubUser.email) {
+      user = await User.findOne({ email: githubUser.email });
+    }
+
+    if (!user) {
+      user = await User.findOne({ githubId: githubUser.id });
+    }
 
     /* =========================
        🆕 CREATE USER
@@ -185,12 +199,14 @@ export const githubCallback = async (req, res) => {
        🔄 UPDATE USER
     ========================= */
     else {
+      user.githubId = githubUser.id;
       user.githubAccessToken = accessToken;
       user.githubUsername = githubUsername;
       user.avatar = githubUser.avatar_url;
+
       await user.save();
 
-      console.log("🔄 Existing user updated");
+      console.log("✅ GitHub linked/updated");
     }
 
     /* =========================
@@ -200,7 +216,15 @@ export const githubCallback = async (req, res) => {
 
     const FRONTEND = process.env.FRONTEND_URL || "http://localhost:5173";
 
-    const redirectUrl = `${FRONTEND}/auth/success?token=${token}`;
+    let redirectUrl = "";
+
+    if (state === "app") {
+      // 📱 MOBILE DEEP LINK
+      redirectUrl = `myapp://auth/success?token=${token}`;
+    } else {
+      // 🌐 WEB
+      redirectUrl = `${FRONTEND}/auth/success?token=${token}`;
+    }
 
     console.log("🔁 Redirecting to:", redirectUrl);
 

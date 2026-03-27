@@ -156,74 +156,16 @@ export const getRepos = async (req, res) => {
   try {
     const userId = req.user._id;
 
-    // 1️⃣ DB se repos nikalo
-    let repos = await Repo.find({ userId })
+    const repos = await Repo.find({ userId })
       .sort({ createdAt: -1 })
       .lean();
 
-    // 2️⃣ Agar DB me repos nahi hai → GitHub se fetch karo
-    if (!repos || repos.length === 0) {
-      console.log("⚠️ No repos in DB → fetching from GitHub");
-
-      const user = await User.findById(userId).select("+githubAccessToken");
-
-      if (!user) {
-        return res.status(404).json({ msg: "User not found" });
-      }
-
-      let token = null;
-      let isAppToken = false;
-
-      // 🔥 priority → GitHub App token
-      if (user.installationId) {
-        try {
-          token = await getInstallationToken(user.installationId);
-          isAppToken = true;
-        } catch (err) {
-          console.log("⚠️ Installation token error:", err.message);
-        }
-      }
-
-      // 🔥 fallback → OAuth token
-      if (!token && user.githubAccessToken) {
-        token = user.githubAccessToken;
-      }
-
-      if (!token) {
-        return res.status(200).json([]); // no repos if not connected
-      }
-
-      // 3️⃣ GitHub API call
-      const ghRes = await axios.get(
-        "https://api.github.com/user/repos",
-        {
-          headers: getHeaders(token, isAppToken)
-        }
-      );
-
-      // 4️⃣ Format response (DB save nahi kar rahe, sirf show kar rahe)
-      const githubRepos = ghRes.data.map((repo) => ({
-        _id: repo.id, // temp id
-        name: repo.full_name,
-        url: repo.html_url,
-        isPrivate: repo.private,
-        stars: repo.stargazers_count,
-        forks: repo.forks_count,
-        language: repo.language,
-        status: "not_added"
-      }));
-
-      return res.json(githubRepos);
-    }
-
-    // 5️⃣ Agar DB me repos hai → wahi return karo
     res.json(repos);
-
   } catch (err) {
-    console.log("❌ getRepos error:", err.message);
     res.status(500).json({ error: "Failed to fetch repos" });
   }
 };
+
 /* ========================= GET SINGLE REPO ========================= */
 export const getRepoById = async (req, res) => {
   try {

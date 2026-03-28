@@ -1,82 +1,65 @@
 import axios from "axios";
 
-const TG_URL = process.env.TG_URL;
-const GRAPH = process.env.TG_GRAPH;
-const TOKEN = process.env.TG_API_KEY; // ✅ FIXED
+// ✅ DIRECT VALUES (jaise tu bola)
+const HOST = "https://tg-5b458e5a-0643-4a92-8518-66f5264f84f2.tg-2635877100.i.tgcloud.io";
+const GRAPH = "dev";
+const TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ2YXJzaG5leWRldjM2NUBnbWFpbC5jb20iLCJpYXQiOjE3NzQ2MDI1NTUsImV4cCI6MTc4MjM3ODU2MCwiaXNzIjoiVGlnZXJHcmFwaCJ9.CUJHVsI4KPBj6NhEpgGP0pPZBxNfsvu3xTxRSEsn9sI";
 
 export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
   try {
     console.log("🧠 TigerGraph Sync Start");
 
-    if (!TOKEN) {
-      console.log("❌ Missing TG_API_KEY");
-      return;
+    for (const dep of deps) {
+      const relatedVulns = vulns.filter(v => v.package === dep.name);
+
+      // 👉 agar vuln nahi bhi hai tab bhi ek baar push kar
+      if (relatedVulns.length === 0) {
+        const url =
+          `${HOST}/restpp/query/${GRAPH}/insertDynamicData` +
+          `?repoId=${encodeURIComponent(repoId)}` +
+          `&dep=${encodeURIComponent(dep.name)}` +
+          `&ver=${encodeURIComponent(dep.version || "unknown")}` +
+          `&vuln=${encodeURIComponent("NA")}` +
+          `&severity=${encodeURIComponent("LOW")}` +
+          `&description=${encodeURIComponent("No vulnerability")}`;
+
+        console.log("🚀 URL:", url);
+
+        const res = await axios.post(url, null, {
+          headers: {
+            Authorization: `Bearer ${TOKEN}`
+          }
+        });
+
+        console.log("✅ TG Response:", res.data);
+      }
+
+      // 👉 vulnerabilities ke liye
+      for (const v of relatedVulns) {
+        const vulnId = v.cve || `${dep.name}_NA`;
+
+        const url =
+          `${HOST}/restpp/query/${GRAPH}/insertDynamicData` +
+          `?repoId=${encodeURIComponent(repoId)}` +
+          `&dep=${encodeURIComponent(dep.name)}` +
+          `&ver=${encodeURIComponent(dep.version || "unknown")}` +
+          `&vuln=${encodeURIComponent(vulnId)}` +
+          `&severity=${encodeURIComponent(v.severity || "MEDIUM")}` +
+          `&description=${encodeURIComponent(v.description || "")}`;
+
+        console.log("🚀 URL:", url);
+
+        const res = await axios.post(url, null, {
+          headers: {
+            Authorization: `Bearer ${TOKEN}`
+          }
+        });
+
+        console.log("✅ TG Response:", res.data);
+      }
     }
 
-    const vertices = {};
-    const edges = {};
-
-    /* =========================
-       📦 REPO
-    ========================= */
-    vertices["Repo"] = {
-      [repoId]: { name: repoId }
-    };
-
-    /* =========================
-       📦 DEPENDENCIES
-    ========================= */
-    vertices["Dependency"] = {};
-    edges["HAS_DEPENDENCY"] = {};
-
-    deps.forEach(dep => {
-      if (!dep.name) return;
-
-      vertices["Dependency"][dep.name] = {
-        version: dep.version || "unknown"
-      };
-
-      if (!edges["HAS_DEPENDENCY"][repoId]) {
-        edges["HAS_DEPENDENCY"][repoId] = {};
-      }
-
-      edges["HAS_DEPENDENCY"][repoId][dep.name] = {};
-    });
-
-    /* =========================
-       🚨 VULNERABILITIES
-    ========================= */
-    vertices["Vulnerability"] = {};
-    edges["HAS_VULNERABILITY"] = {};
-
-    vulns.forEach(v => {
-      if (!v.package) return;
-
-      const vulnId = v.cve || `${v.package}_NA`;
-
-      vertices["Vulnerability"][vulnId] = {
-        severity: v.severity,
-        description: v.description || ""
-      };
-
-      if (!edges["HAS_VULNERABILITY"][v.package]) {
-        edges["HAS_VULNERABILITY"][v.package] = {};
-      }
-
-      edges["HAS_VULNERABILITY"][v.package][vulnId] = {};
-    });
-
-    /* =========================
-       🚀 API CALL
-    ========================= */
-    const endpoint = `${TG_URL}/restpp/graph/${GRAPH}?access_token=${encodeURIComponent(TOKEN)}`;
-
-    console.log("📡 Sending to:", endpoint);
-
-    const res = await axios.post(endpoint, { vertices, edges });
-
-    console.log("✅ TigerGraph Success");
-    console.log(JSON.stringify(res.data, null, 2));
+    console.log("🎉 TigerGraph Sync Complete");
 
   } catch (err) {
     console.log("❌ TG Error:", err.response?.data || err.message);

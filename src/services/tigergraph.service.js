@@ -2,10 +2,17 @@ import axios from "axios";
 
 const TG_URL = process.env.TG_URL;
 const GRAPH = process.env.TG_GRAPH;
-const TOKEN = process.env.TG_TOKEN;
+const TOKEN = process.env.TG_API_KEY; // ✅ FIXED
 
 export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
   try {
+    console.log("🧠 TigerGraph Sync Start");
+
+    if (!TOKEN) {
+      console.log("❌ Missing TG_API_KEY");
+      return;
+    }
+
     const vertices = {};
     const edges = {};
 
@@ -59,12 +66,17 @@ export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
       edges["HAS_VULNERABILITY"][v.package][vulnId] = {};
     });
 
-    const endpoint = `${TG_URL}/restpp/graph/${GRAPH}?access_token=${TOKEN}`;
+    /* =========================
+       🚀 API CALL
+    ========================= */
+    const endpoint = `${TG_URL}/restpp/graph/${GRAPH}?access_token=${encodeURIComponent(TOKEN)}`;
+
+    console.log("📡 Sending to:", endpoint);
 
     const res = await axios.post(endpoint, { vertices, edges });
 
     console.log("✅ TigerGraph Success");
-    console.log(res.data);
+    console.log(JSON.stringify(res.data, null, 2));
 
   } catch (err) {
     console.log("❌ TG Error:", err.response?.data || err.message);

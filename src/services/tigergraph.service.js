@@ -2,20 +2,10 @@ import axios from "axios";
 
 const TG_URL = process.env.TG_URL;
 const GRAPH = process.env.TG_GRAPH;
-const API_KEY = process.env.TG_API_KEY;
+const TOKEN = process.env.TG_TOKEN;
 
 export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
   try {
-    console.log("\n🧠 ===============================");
-    console.log("🧠 TigerGraph Sync Started");
-    console.log("==================================");
-
-    console.log("🔑 API KEY:", API_KEY ? "Loaded ✅" : "Missing ❌");
-
-    if (!API_KEY) {
-      throw new Error("TigerGraph API key missing");
-    }
-
     const vertices = {};
     const edges = {};
 
@@ -23,93 +13,60 @@ export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
        📦 REPO
     ========================= */
     vertices["Repo"] = {
-      [repoId]: {
-        name: repoId
-      }
+      [repoId]: { name: repoId }
     };
 
     /* =========================
-       📦 PACKAGES
+       📦 DEPENDENCIES
     ========================= */
-    vertices["Package"] = {};
-    edges["Repo"] = {
-      uses: {}
-    };
+    vertices["Dependency"] = {};
+    edges["HAS_DEPENDENCY"] = {};
 
     deps.forEach(dep => {
       if (!dep.name) return;
 
-      vertices["Package"][dep.name] = {
-        name: dep.name,
-        version: dep.cleanVersion || dep.version || "unknown"
+      vertices["Dependency"][dep.name] = {
+        version: dep.version || "unknown"
       };
 
-      if (!edges["Repo"]["uses"][repoId]) {
-        edges["Repo"]["uses"][repoId] = {
-          Package: {}
-        };
+      if (!edges["HAS_DEPENDENCY"][repoId]) {
+        edges["HAS_DEPENDENCY"][repoId] = {};
       }
 
-      edges["Repo"]["uses"][repoId]["Package"][dep.name] = {};
+      edges["HAS_DEPENDENCY"][repoId][dep.name] = {};
     });
 
     /* =========================
        🚨 VULNERABILITIES
     ========================= */
     vertices["Vulnerability"] = {};
-    edges["Package"] = {
-      has_vulnerability: {}
-    };
+    edges["HAS_VULNERABILITY"] = {};
 
     vulns.forEach(v => {
       if (!v.package) return;
 
-      const vulnId = `${v.package}_${v.cve || "NA"}`;
+      const vulnId = v.cve || `${v.package}_NA`;
 
       vertices["Vulnerability"][vulnId] = {
-        severity: v.severity || "UNKNOWN"
+        severity: v.severity,
+        description: v.description || ""
       };
 
-      if (!edges["Package"]["has_vulnerability"][v.package]) {
-        edges["Package"]["has_vulnerability"][v.package] = {
-          Vulnerability: {}
-        };
+      if (!edges["HAS_VULNERABILITY"][v.package]) {
+        edges["HAS_VULNERABILITY"][v.package] = {};
       }
 
-      edges["Package"]["has_vulnerability"][v.package]["Vulnerability"][vulnId] = {
-        severity: v.severity || "UNKNOWN"
-      };
+      edges["HAS_VULNERABILITY"][v.package][vulnId] = {};
     });
 
-    /* =========================
-       🚀 FINAL API CALL (FIXED)
-    ========================= */
+    const endpoint = `${TG_URL}/restpp/graph/${GRAPH}?access_token=${TOKEN}`;
 
-    // 🔥 IMPORTANT: encode token
-    const encodedToken = encodeURIComponent(API_KEY);
+    const res = await axios.post(endpoint, { vertices, edges });
 
-    const endpoint = `${TG_URL}/restpp/graph/${GRAPH}?access_token=${encodedToken}`;
-
-    console.log("📡 Sending to:", endpoint);
-    console.log("📦 Vertices:", Object.keys(vertices).length);
-
-    const res = await axios.post(
-      endpoint,
-      { vertices, edges },
-      {
-        headers: {
-          "Content-Type": "application/json"
-        }
-      }
-    );
-
-    console.log("✅ TigerGraph sync success");
-    console.log(JSON.stringify(res.data, null, 2));
-    console.log("==================================\n");
+    console.log("✅ TigerGraph Success");
+    console.log(res.data);
 
   } catch (err) {
-    console.log("\n❌ TigerGraph error:");
-    console.log(err.response?.data || err.message);
-    console.log("==================================\n");
+    console.log("❌ TG Error:", err.response?.data || err.message);
   }
 };

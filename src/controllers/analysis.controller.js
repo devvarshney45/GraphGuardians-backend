@@ -10,10 +10,6 @@ import { checkVulnerabilities } from "../services/vulnerability.service.js";
 import { buildGraph } from "../utils/graph.util.js";
 import { calculateRisk } from "../utils/risk.util.js";
 
-// ❌ REMOVE Neo4j
-// import { pushToNeo4j } from "../services/neo4j.service.js";
-
-// ✅ ADD TigerGraph
 import { pushToTigerGraph } from "../services/tigergraph.service.js";
 
 import { generateAIInsights } from "../services/ai.service.js";
@@ -58,24 +54,17 @@ export const analyzeRepo = async (req, res) => {
     console.log("==================================");
 
     /* =========================
-       OLD DATA
-    ========================= */
-    const oldDeps = currentVersion
-      ? await Dependency.find({ repoId, versionGroup: currentVersion }).lean()
-      : [];
-
-    const oldVulns = currentVersion
-      ? await Vulnerability.find({ repoId, versionGroup: currentVersion }).lean()
-      : [];
-
-    /* =========================
        FETCH package.json
     ========================= */
     const pkg = await fetchPackageJson(url, token);
 
     if (!pkg) {
-      return response.status(400).json({
-        msg: "package.json not accessible"
+      console.log("⚠️ No package.json → skipping graph");
+
+      return response.status(200).json({
+        msg: "No package.json found",
+        dependencies: [],
+        vulnerabilities: []
       });
     }
 
@@ -111,19 +100,6 @@ export const analyzeRepo = async (req, res) => {
 
     console.log(`📦 Dependencies: ${uniqueDeps.length}`);
 
-    /* =========================
-       COMPARE CHANGES
-    ========================= */
-    const depChanges = compareDependencies(oldDeps, uniqueDeps);
-
-    console.log("🔄 Changes:");
-    console.log(`➕ Added: ${depChanges.added.length}`);
-    console.log(`❌ Removed: ${depChanges.removed.length}`);
-    console.log(`♻️ Updated: ${depChanges.updated.length}`);
-
-    /* =========================
-       SAVE DEPENDENCIES
-    ========================= */
     if (uniqueDeps.length > 0) {
       await Dependency.insertMany(uniqueDeps, { ordered: false });
     }
@@ -153,16 +129,15 @@ export const analyzeRepo = async (req, res) => {
     /* =========================
        ALERTS
     ========================= */
-    const newVulns = findNewVulnerabilities(oldVulns, formattedVulns);
-    const fixedVulns = findFixedVulnerabilities(oldVulns, formattedVulns);
-
-    const alerts = generateAlerts(repoId, newVulns, fixedVulns);
+    const alerts = generateAlerts(
+      repoId,
+      findNewVulnerabilities([], formattedVulns),
+      findFixedVulnerabilities([], formattedVulns)
+    );
 
     if (alerts.length > 0) {
       await Alert.insertMany(alerts);
       console.log(`🔔 Alerts: ${alerts.length}`);
-    } else {
-      console.log("✅ No new alerts");
     }
 
     /* =========================
@@ -184,36 +159,24 @@ export const analyzeRepo = async (req, res) => {
     }
 
     /* =========================
-       DEPENDENCY TREE (optional future)
+       TIGERGRAPH SYNC (SAFE)
     ========================= */
-    let depEdges = [];
-
     try {
-      console.log("🌳 Generating dependency tree...");
-      const tree = getDependencyTree(url);
+      if (!uniqueDeps.length) {
+        console.log("⛔ Skipping TigerGraph (no dependencies)");
+      } else if (!process.env.TG_TOKEN) {
+        console.log("❌ TG_TOKEN missing → skip");
+      } else {
+        console.log("🧠 TigerGraph Sync Start");
 
-      if (tree) {
-        depEdges = extractDependencyEdges(tree);
+        await pushToTigerGraph(
+          repoId,
+          uniqueDeps,
+          formattedVulns
+        );
+
+        console.log("🧠 TigerGraph Sync Done ✅");
       }
-    } catch (err) {
-      console.log("⚠️ Tree parsing failed:", err.message);
-    }
-
-    console.log(`🔗 Dependency edges: ${depEdges.length}`);
-
-    /* =========================
-       🔥 TIGERGRAPH SYNC
-    ========================= */
-    try {
-      console.log("🧠 TigerGraph Sync Start");
-
-      await pushToTigerGraph(
-        repoId,
-        uniqueDeps,
-        formattedVulns
-      );
-
-      console.log("🧠 TigerGraph Sync Done ✅");
     } catch (err) {
       console.log("⚠️ TigerGraph error:", err.message);
     }
@@ -250,14 +213,12 @@ export const analyzeRepo = async (req, res) => {
 
     return response.json({
       version: newVersion,
-      scanCount: updatedRepo.scanCount,
       repo: updatedRepo,
       stats: {
         riskScore: risk,
         dependencies: uniqueDeps.length,
         vulnerabilities: formattedVulns.length
       },
-      changes: depChanges,
       dependencies: uniqueDeps,
       vulnerabilities: formattedVulns,
       graph,

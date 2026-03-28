@@ -10,9 +10,11 @@ import { buildTreeFromLockfile } from "../services/dependencyTree.service.js";
 
 import { checkVulnerabilities } from "../services/vulnerability.service.js";
 import { calculateRisk } from "../utils/risk.util.js";
-import { pushToNeo4j } from "../services/neo4j.service.js";
 
-// ✅ NEW TIGER GRAPH IMPORT
+// ❌ REMOVED Neo4j
+// import { pushToNeo4j } from "../services/neo4j.service.js";
+
+// ✅ TigerGraph only
 import { pushToTigerGraph } from "../services/tigergraph.service.js";
 
 import { generateAIInsights } from "../services/ai.service.js";
@@ -194,12 +196,7 @@ export const analyzeRepo = async (req, res) => {
 
     /* ========================= GRAPH ========================= */
 
-    // ✅ Neo4j (existing)
-    await pushToNeo4j(repoIdStr, uniqueDeps, formattedVulns, tree).catch(() => {
-      console.log("⚠️ Neo4j failed");
-    });
-
-    // 🔥 NEW: TIGER GRAPH (IMPORTANT)
+    // 🔥 ONLY TigerGraph now
     await pushToTigerGraph(
       repoIdStr,
       uniqueDeps.map(d => ({

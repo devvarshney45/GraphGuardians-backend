@@ -3,7 +3,7 @@ import Dependency from "../models/dependency.model.js";
 import Vulnerability from "../models/vulnerability.model.js";
 import Alert from "../models/alert.model.js";
 import ScanHistory from "../models/scanHistory.model.js";
-import User from "../models/user.model.js"; // 🔥 NEW
+import User from "../models/user.model.js";
 
 import { fetchFileFromGitHub } from "../services/githubContent.service.js";
 import { buildTreeFromLockfile } from "../services/dependencyTree.service.js";
@@ -12,8 +12,11 @@ import { checkVulnerabilities } from "../services/vulnerability.service.js";
 import { calculateRisk } from "../utils/risk.util.js";
 import { pushToNeo4j } from "../services/neo4j.service.js";
 
-import { generateAIInsights } from "../services/ai.service.js"; // 🔥 NEW
-import { sendNotification } from "../services/firebase.service.js"; // 🔥 NEW
+// ✅ NEW TIGER GRAPH IMPORT
+import { pushToTigerGraph } from "../services/tigergraph.service.js";
+
+import { generateAIInsights } from "../services/ai.service.js";
+import { sendNotification } from "../services/firebase.service.js";
 
 import {
   findNewVulnerabilities,
@@ -21,9 +24,6 @@ import {
   generateAlerts
 } from "../utils/diff.util.js";
 
-/* =========================
-   🚀 ANALYZE REPO (FINAL ULTRA PRO MAX)
-========================= */
 export const analyzeRepo = async (req, res) => {
   const TIMEOUT = 25000;
 
@@ -37,7 +37,6 @@ export const analyzeRepo = async (req, res) => {
   const main = async () => {
     const { url, repoId, token } = req.body;
 
-    /* ========================= VALIDATION ========================= */
     const repo = await Repo.findById(repoId);
     if (!repo) return response.status(404).json({ msg: "Repo not found" });
 
@@ -68,8 +67,6 @@ export const analyzeRepo = async (req, res) => {
 
     /* ========================= NO PACKAGE ========================= */
     if (!pkg) {
-      console.log("⚠️ No package.json → fallback");
-
       const updatedRepo = await Repo.findByIdAndUpdate(
         repoId,
         {
@@ -148,7 +145,7 @@ export const analyzeRepo = async (req, res) => {
         severity: v.severity,
         cve: v.cve,
         fix: v.fix,
-        description: v.description || "" // 🔥 IMPORTANT
+        description: v.description || ""
       }));
 
       await Vulnerability.insertMany(formattedVulns, { ordered: false }).catch(() => {});
@@ -171,7 +168,7 @@ export const analyzeRepo = async (req, res) => {
       await Alert.insertMany(alerts).catch(() => {});
     } catch {}
 
-    /* ========================= 🔥 AI INSIGHTS ========================= */
+    /* ========================= AI ========================= */
     let aiInsights = [];
 
     try {
@@ -180,7 +177,7 @@ export const analyzeRepo = async (req, res) => {
       console.log("⚠️ AI failed");
     }
 
-    /* ========================= 🔥 MOBILE PUSH ========================= */
+    /* ========================= PUSH NOTIFICATION ========================= */
     try {
       const user = await User.findById(repo.userId);
 
@@ -190,23 +187,33 @@ export const analyzeRepo = async (req, res) => {
           "🚨 Security Alert",
           `${alerts.length} new vulnerabilities detected`
         );
-
-        console.log("📱 Push sent");
       }
     } catch (err) {
       console.log("❌ Push failed:", err.message);
     }
 
     /* ========================= GRAPH ========================= */
-    const cleanEdges = tree
-      .filter(d => d.parent)
-      .map(d => ({
-        from: d.parent,
-        to: d.name
-      }));
 
-    await pushToNeo4j(repoIdStr, uniqueDeps, formattedVulns, cleanEdges).catch(() => {
+    // ✅ Neo4j (existing)
+    await pushToNeo4j(repoIdStr, uniqueDeps, formattedVulns, tree).catch(() => {
       console.log("⚠️ Neo4j failed");
+    });
+
+    // 🔥 NEW: TIGER GRAPH (IMPORTANT)
+    await pushToTigerGraph(
+      repoIdStr,
+      uniqueDeps.map(d => ({
+        name: d.name,
+        version: d.version
+      })),
+      formattedVulns.map(v => ({
+        package: v.package,
+        cve: v.cve,
+        severity: v.severity,
+        description: v.description
+      }))
+    ).catch(() => {
+      console.log("⚠️ TigerGraph failed");
     });
 
     /* ========================= RISK ========================= */
@@ -243,17 +250,16 @@ export const analyzeRepo = async (req, res) => {
       risk,
       uniqueDeps.length,
       formattedVulns.length,
-      aiInsights // 🔥 SEND AI
+      aiInsights
     );
 
     return response.json({
       success: true,
       repo: updatedRepo,
-      aiInsights // 🔥 ALSO RETURN API
+      aiInsights
     });
   };
 
-  /* ========================= TIMEOUT ========================= */
   try {
     await Promise.race([
       main(),
@@ -275,7 +281,6 @@ export const analyzeRepo = async (req, res) => {
   }
 };
 
-/* ========================= SOCKET HELPER ========================= */
 const emitResult = (req, repoIdStr, repo, risk, deps, vulns, aiInsights = []) => {
   const io = req.app.get("io");
 
@@ -287,7 +292,7 @@ const emitResult = (req, repoIdStr, repo, risk, deps, vulns, aiInsights = []) =>
         dependencies: deps,
         vulnerabilities: vulns
       },
-      aiInsights // 🔥 FRONTEND USE
+      aiInsights
     });
   }
 };

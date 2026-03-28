@@ -3,41 +3,41 @@ import Dependency from "../models/dependency.model.js";
 import Vulnerability from "../models/vulnerability.model.js";
 import Alert from "../models/alert.model.js";
 import ScanHistory from "../models/scanHistory.model.js";
+import User from "../models/user.model.js"; // 🔥 NEW
 
-import { fetchPackageJson } from "../services/github.service.js";
-import { extractDependencies } from "../utils/parser.util.js";
+import { fetchFileFromGitHub } from "../services/githubContent.service.js";
+import { buildTreeFromLockfile } from "../services/dependencyTree.service.js";
+
 import { checkVulnerabilities } from "../services/vulnerability.service.js";
-import { buildGraph } from "../utils/graph.util.js";
 import { calculateRisk } from "../utils/risk.util.js";
+import { pushToNeo4j } from "../services/neo4j.service.js";
 
-import { pushToTigerGraph } from "../services/tigergraph.service.js";
-
-import { generateAIInsights } from "../services/ai.service.js";
-
-import { getDependencyTree } from "../services/dependencyTree.service.js";
-import { extractDependencyEdges } from "../utils/treeParser.util.js";
+import { generateAIInsights } from "../services/ai.service.js"; // 🔥 NEW
+import { sendNotification } from "../services/firebase.service.js"; // 🔥 NEW
 
 import {
-  compareDependencies,
   findNewVulnerabilities,
   findFixedVulnerabilities,
   generateAlerts
 } from "../utils/diff.util.js";
 
+/* =========================
+   🚀 ANALYZE REPO (FINAL ULTRA PRO MAX)
+========================= */
 export const analyzeRepo = async (req, res) => {
-  try {
-    const safeRes = {
-      status: () => safeRes,
-      json: () => {}
-    };
+  const TIMEOUT = 25000;
 
-    const response = res?.status ? res : safeRes;
+  const safeRes = {
+    status: () => safeRes,
+    json: () => {}
+  };
 
+  const response = res?.status ? res : safeRes;
+
+  const main = async () => {
     const { url, repoId, token } = req.body;
 
-    /* =========================
-       🔐 Repo validation
-    ========================= */
+    /* ========================= VALIDATION ========================= */
     const repo = await Repo.findById(repoId);
     if (!repo) return response.status(404).json({ msg: "Repo not found" });
 
@@ -45,156 +45,182 @@ export const analyzeRepo = async (req, res) => {
       return response.status(403).json({ msg: "Unauthorized" });
     }
 
-    const currentVersion = repo.scanCount || 0;
-    const newVersion = currentVersion + 1;
+    const repoIdStr = String(repoId);
 
-    console.log("\n🚀 ===============================");
-    console.log(`📦 Repo: ${repo.name}`);
-    console.log(`🔢 Version: ${currentVersion} → ${newVersion}`);
-    console.log("==================================");
+    await Repo.findByIdAndUpdate(repoId, { status: "scanning" });
 
-    /* =========================
-       FETCH package.json
-    ========================= */
-    const pkg = await fetchPackageJson(url, token);
+    const newVersion = (repo.scanCount || 0) + 1;
 
+    console.log(`🚀 SCAN START: ${repo.name}`);
+
+    /* ========================= FETCH FILES ========================= */
+    let lockfile = null;
+    let pkg = null;
+
+    try {
+      [lockfile, pkg] = await Promise.all([
+        fetchFileFromGitHub(url, "package-lock.json", token),
+        fetchFileFromGitHub(url, "package.json", token)
+      ]);
+    } catch {
+      console.log("⚠️ GitHub fetch failed");
+    }
+
+    /* ========================= NO PACKAGE ========================= */
     if (!pkg) {
-      console.log("⚠️ No package.json → skipping graph");
+      console.log("⚠️ No package.json → fallback");
 
-      return response.status(200).json({
-        msg: "No package.json found",
-        dependencies: [],
-        vulnerabilities: []
+      const updatedRepo = await Repo.findByIdAndUpdate(
+        repoId,
+        {
+          scanCount: newVersion,
+          riskScore: 0,
+          dependencyCount: 0,
+          vulnerabilityCount: 0,
+          lastScanned: new Date(),
+          status: "scanned"
+        },
+        { new: true }
+      ).lean();
+
+      emitResult(req, repoIdStr, updatedRepo, 0, 0, 0, []);
+
+      return response.json({
+        success: true,
+        repo: updatedRepo
       });
     }
 
-    console.log("📥 package.json fetched");
+    /* ========================= TREE ========================= */
+    let tree = [];
 
-    /* =========================
-       EXTRACT DEPENDENCIES
-    ========================= */
-    const rawDeps = extractDependencies(pkg);
+    try {
+      if (lockfile?.dependencies) {
+        console.log("✅ LOCKFILE MODE");
+        tree = buildTreeFromLockfile(lockfile);
+      } else {
+        console.log("⚠️ FALLBACK MODE");
+        const deps = pkg.dependencies || {};
 
-    const seen = new Set();
-    const uniqueDeps = [];
-
-    for (const d of rawDeps) {
-      if (!d.name) continue;
-
-      const cleanName = d.name.toLowerCase().trim();
-      const key = `${cleanName}_${newVersion}`;
-
-      if (!seen.has(key)) {
-        seen.add(key);
-
-        uniqueDeps.push({
-          repoId,
-          versionGroup: newVersion,
-          name: cleanName,
-          version: d.version || "unknown",
-          cleanVersion: d.cleanVersion || "",
-          type: d.type || "prod"
-        });
+        tree = Object.entries(deps).map(([name, version]) => ({
+          name,
+          version: version || "latest",
+          parent: null
+        }));
       }
+    } catch {
+      console.log("⚠️ Tree build failed");
     }
+
+    /* ========================= UNIQUE DEPS ========================= */
+    const seen = new Set();
+
+    const uniqueDeps = tree
+      .filter(d => {
+        const key = `${d.name}@${d.version}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map(d => ({
+        repoId: repoIdStr,
+        versionGroup: newVersion,
+        name: d.name.toLowerCase(),
+        version: String(d.version || "unknown"),
+        type: "prod"
+      }));
 
     console.log(`📦 Dependencies: ${uniqueDeps.length}`);
 
-    if (uniqueDeps.length > 0) {
-      await Dependency.insertMany(uniqueDeps, { ordered: false });
-    }
+    await Dependency.insertMany(uniqueDeps, { ordered: false }).catch(() => {});
 
-    /* =========================
-       VULNERABILITIES
-    ========================= */
-    const vulns = await checkVulnerabilities(uniqueDeps);
+    /* ========================= VULNERABILITIES ========================= */
+    let formattedVulns = [];
 
-    const formattedVulns = vulns.map(v => ({
-      repoId,
-      versionGroup: newVersion,
-      package: v.package?.toLowerCase().trim(),
-      version: v.version,
-      severity: v.severity || "unknown",
-      description: v.description,
-      cve: v.cve,
-      fix: v.fix
-    }));
+    try {
+      const vulns = await checkVulnerabilities(uniqueDeps);
 
-    if (formattedVulns.length > 0) {
-      await Vulnerability.insertMany(formattedVulns, { ordered: false });
+      formattedVulns = vulns.map(v => ({
+        repoId: repoIdStr,
+        versionGroup: newVersion,
+        package: v.package.toLowerCase(),
+        version: String(v.version || ""),
+        severity: v.severity,
+        cve: v.cve,
+        fix: v.fix,
+        description: v.description || "" // 🔥 IMPORTANT
+      }));
+
+      await Vulnerability.insertMany(formattedVulns, { ordered: false }).catch(() => {});
+    } catch {
+      console.log("⚠️ Vulnerability check failed");
     }
 
     console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
 
-    /* =========================
-       ALERTS
-    ========================= */
-    const alerts = generateAlerts(
-      repoId,
-      findNewVulnerabilities([], formattedVulns),
-      findFixedVulnerabilities([], formattedVulns)
-    );
+    /* ========================= ALERTS ========================= */
+    let alerts = [];
 
-    if (alerts.length > 0) {
-      await Alert.insertMany(alerts);
-      console.log(`🔔 Alerts: ${alerts.length}`);
-    }
+    try {
+      alerts = generateAlerts(
+        repoIdStr,
+        findNewVulnerabilities([], formattedVulns),
+        findFixedVulnerabilities([], formattedVulns)
+      );
 
-    /* =========================
-       GRAPH + RISK
-    ========================= */
-    const graph = buildGraph(uniqueDeps, formattedVulns, repoId);
-    const risk = calculateRisk(formattedVulns);
+      await Alert.insertMany(alerts).catch(() => {});
+    } catch {}
 
-    console.log(`⚠️ Risk Score: ${risk}`);
-
-    /* =========================
-       AI
-    ========================= */
+    /* ========================= 🔥 AI INSIGHTS ========================= */
     let aiInsights = [];
+
     try {
-      aiInsights = await generateAIInsights(formattedVulns);
-    } catch (err) {
-      console.log("⚠️ AI failed:", err.message);
+      aiInsights = await generateAIInsights(formattedVulns, uniqueDeps);
+    } catch {
+      console.log("⚠️ AI failed");
     }
 
-    /* =========================
-       TIGERGRAPH SYNC (SAFE)
-    ========================= */
+    /* ========================= 🔥 MOBILE PUSH ========================= */
     try {
-      if (!uniqueDeps.length) {
-        console.log("⛔ Skipping TigerGraph (no dependencies)");
-      } else if (!process.env.TG_TOKEN) {
-        console.log("❌ TG_TOKEN missing → skip");
-      } else {
-        console.log("🧠 TigerGraph Sync Start");
+      const user = await User.findById(repo.userId);
 
-        await pushToTigerGraph(
-          repoId,
-          uniqueDeps,
-          formattedVulns
+      if (user?.fcmToken && alerts.length > 0) {
+        await sendNotification(
+          user.fcmToken,
+          "🚨 Security Alert",
+          `${alerts.length} new vulnerabilities detected`
         );
 
-        console.log("🧠 TigerGraph Sync Done ✅");
+        console.log("📱 Push sent");
       }
     } catch (err) {
-      console.log("⚠️ TigerGraph error:", err.message);
+      console.log("❌ Push failed:", err.message);
     }
 
-    /* =========================
-       SCAN HISTORY
-    ========================= */
+    /* ========================= GRAPH ========================= */
+    const cleanEdges = tree
+      .filter(d => d.parent)
+      .map(d => ({
+        from: d.parent,
+        to: d.name
+      }));
+
+    await pushToNeo4j(repoIdStr, uniqueDeps, formattedVulns, cleanEdges).catch(() => {
+      console.log("⚠️ Neo4j failed");
+    });
+
+    /* ========================= RISK ========================= */
+    const risk = calculateRisk(formattedVulns);
+
     await ScanHistory.create({
-      repoId,
+      repoId: repoIdStr,
       version: newVersion,
       riskScore: risk,
       dependencyCount: uniqueDeps.length,
       vulnerabilityCount: formattedVulns.length
-    });
+    }).catch(() => {});
 
-    /* =========================
-       UPDATE REPO
-    ========================= */
+    /* ========================= UPDATE ========================= */
     const updatedRepo = await Repo.findByIdAndUpdate(
       repoId,
       {
@@ -205,34 +231,63 @@ export const analyzeRepo = async (req, res) => {
         lastScanned: new Date(),
         status: "scanned"
       },
-      { returnDocument: "after" }
+      { new: true }
     ).lean();
 
-    console.log("📊 Scan Completed ✅");
-    console.log("==================================\n");
+    console.log("✅ SCAN COMPLETE");
+
+    emitResult(
+      req,
+      repoIdStr,
+      updatedRepo,
+      risk,
+      uniqueDeps.length,
+      formattedVulns.length,
+      aiInsights // 🔥 SEND AI
+    );
 
     return response.json({
-      version: newVersion,
+      success: true,
       repo: updatedRepo,
-      stats: {
-        riskScore: risk,
-        dependencies: uniqueDeps.length,
-        vulnerabilities: formattedVulns.length
-      },
-      dependencies: uniqueDeps,
-      vulnerabilities: formattedVulns,
-      graph,
-      aiInsights,
-      alerts
+      aiInsights // 🔥 ALSO RETURN API
+    });
+  };
+
+  /* ========================= TIMEOUT ========================= */
+  try {
+    await Promise.race([
+      main(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Scan timeout")), TIMEOUT)
+      )
+    ]);
+  } catch (err) {
+    console.log("❌ TIMEOUT:", err.message);
+
+    const { repoId } = req.body;
+
+    await Repo.findByIdAndUpdate(repoId, {
+      status: "scanned",
+      riskScore: 0
     });
 
-  } catch (err) {
-    console.log("❌ Analyze Error:", err.message);
+    emitResult(req, repoId, { name: "Timeout Repo" }, 0, 0, 0, []);
+  }
+};
 
-    if (res?.status) {
-      return res.status(500).json({
-        error: err.message
-      });
-    }
+/* ========================= SOCKET HELPER ========================= */
+const emitResult = (req, repoIdStr, repo, risk, deps, vulns, aiInsights = []) => {
+  const io = req.app.get("io");
+
+  if (io) {
+    io.to(repoIdStr).emit(`scan-${repoIdStr}`, {
+      repo,
+      stats: {
+        riskScore: risk,
+        dependencies: deps,
+        vulnerabilities: vulns
+      },
+      aiInsights // 🔥 FRONTEND USE
+    });
   }
 };

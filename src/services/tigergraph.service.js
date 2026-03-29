@@ -1,18 +1,33 @@
 import axios from "axios";
 
-// ✅ DIRECT VALUES (jaise tu bola)
+// ✅ DIRECT VALUES (UNCHANGED)
 const HOST = "https://tg-5b458e5a-0643-4a92-8518-66f5264f84f2.tg-2635877100.i.tgcloud.io";
 const GRAPH = "dev";
 const TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ2YXJzaG5leWRldjM2NUBnbWFpbC5jb20iLCJpYXQiOjE3NzQ2MDI1NTUsImV4cCI6MTc4MjM3ODU2MCwiaXNzIjoiVGlnZXJHcmFwaCJ9.CUJHVsI4KPBj6NhEpgGP0pPZBxNfsvu3xTxRSEsn9sI";
 
-export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
+// 🔥 UPDATED FUNCTION
+export const pushToTigerGraph = async (
+  repoId,
+  deps = [],
+  vulns = [],
+  depEdges = [] // ✅ NEW (optional, backward compatible)
+) => {
   try {
     console.log("🧠 TigerGraph Sync Start");
 
+    const processed = new Set(); // 🔥 duplicate avoid
+
     for (const dep of deps) {
+      const depKey = `${dep.name}@${dep.version}`;
+
+      if (processed.has(depKey)) continue;
+      processed.add(depKey);
+
       const relatedVulns = vulns.filter(v => v.package === dep.name);
 
-      // 👉 agar vuln nahi bhi hai tab bhi ek baar push kar
+      /* =========================
+         📦 NO VULNERABILITY CASE
+      ========================= */
       if (relatedVulns.length === 0) {
         const url =
           `${HOST}/restpp/query/${GRAPH}/insertDynamicData` +
@@ -34,7 +49,9 @@ export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
         console.log("✅ TG Response:", res.data);
       }
 
-      // 👉 vulnerabilities ke liye
+      /* =========================
+         🚨 VULNERABILITIES
+      ========================= */
       for (const v of relatedVulns) {
         const vulnId = v.cve || `${dep.name}_NA`;
 
@@ -56,6 +73,36 @@ export const pushToTigerGraph = async (repoId, deps = [], vulns = []) => {
         });
 
         console.log("✅ TG Response:", res.data);
+      }
+    }
+
+    /* =========================
+       🔥 DEP → DEP CHAIN (NEW)
+    ========================= */
+    if (depEdges.length > 0) {
+      console.log("🔗 Pushing dependency chains...");
+
+      const chainSet = new Set();
+
+      for (const edge of depEdges) {
+        const key = `${edge.from}->${edge.to}`;
+        if (chainSet.has(key)) continue;
+        chainSet.add(key);
+
+        const url =
+          `${HOST}/restpp/query/${GRAPH}/insertDependencyChain` +
+          `?from=${encodeURIComponent(edge.from)}` +
+          `&to=${encodeURIComponent(edge.to)}`;
+
+        console.log("🔗 Chain URL:", url);
+
+        const res = await axios.post(url, null, {
+          headers: {
+            Authorization: `Bearer ${TOKEN}`
+          }
+        });
+
+        console.log("✅ Chain Response:", res.data);
       }
     }
 

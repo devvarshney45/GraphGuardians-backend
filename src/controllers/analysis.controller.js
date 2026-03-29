@@ -195,23 +195,42 @@ export const analyzeRepo = async (req, res) => {
     }
 
     /* ========================= GRAPH ========================= */
+// 🔥 IMPORTANT CHANGE: tree bhi pass karna hai TigerGraph ko
 
-    // 🔥 ONLY TigerGraph now
-    await pushToTigerGraph(
-      repoIdStr,
-      uniqueDeps.map(d => ({
-        name: d.name,
-        version: d.version
-      })),
-      formattedVulns.map(v => ({
-        package: v.package,
-        cve: v.cve,
-        severity: v.severity,
-        description: v.description
-      }))
-    ).catch(() => {
-      console.log("⚠️ TigerGraph failed");
-    });
+/* ========================= GRAPH ========================= */
+
+// 🔥 BUILD DEP-DEP CHAINS
+const depEdges = tree
+  .filter(d => d.parent)
+  .map(d => ({
+    from: d.parent.toLowerCase(),
+    to: d.name.toLowerCase()
+  }));
+
+// 🔥 ONLY TigerGraph (CHAIN ENABLED)
+await pushToTigerGraph(
+  repoIdStr,
+
+  // 📦 dependencies
+  uniqueDeps.map(d => ({
+    name: d.name,
+    version: d.version
+  })),
+
+  // 🚨 vulnerabilities
+  formattedVulns.map(v => ({
+    package: v.package,
+    cve: v.cve,
+    severity: v.severity,
+    description: v.description
+  })),
+
+  // 🔥 NEW: dependency chain edges
+  depEdges
+).catch(() => {
+  console.log("⚠️ TigerGraph failed");
+});
+    
 
     /* ========================= RISK ========================= */
     const risk = calculateRisk(formattedVulns);

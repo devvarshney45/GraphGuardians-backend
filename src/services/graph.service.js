@@ -1,70 +1,139 @@
-export const buildGraph = (deps, vulns, repo) => {
+export const buildGraph = (deps = [], vulns = [], repo = null) => {
   const nodes = [];
   const edges = [];
 
   const nodeSet = new Set();
+  const edgeSet = new Set(); // 🔥 duplicate edge prevent
 
-  // 🟢 Repo Node
+  /* =========================
+     🟢 REPO NODE
+  ========================= */
   if (repo) {
+    const repoId = repo._id.toString();
+
     nodes.push({
-      id: repo._id.toString(),
+      id: repoId,
       label: repo.name,
-      type: "repo"
+      type: "repo",
+      size: 30
     });
+
+    nodeSet.add(repoId);
   }
 
-  // 🟡 Dependencies
+  /* =========================
+     🟡 DEPENDENCY NODES
+  ========================= */
   deps.forEach(dep => {
-    if (!nodeSet.has(dep.name)) {
+    if (!dep?.name) return;
+
+    const depId = dep.name.toLowerCase();
+
+    // ✅ prevent duplicate nodes
+    if (!nodeSet.has(depId)) {
       nodes.push({
-        id: dep.name,
-        label: `${dep.name}@${dep.version}`,
-        type: "dependency"
+        id: depId,
+        label: `${dep.name}@${dep.version || "latest"}`,
+        type: "dependency",
+        size: 22,
+        color: "#4da6ff"
       });
-      nodeSet.add(dep.name);
+
+      nodeSet.add(depId);
     }
 
-    // repo → dependency
+    // 🔗 repo → dependency
     if (repo) {
-      edges.push({
-        from: repo._id.toString(),
-        to: dep.name,
-        type: "uses"
-      });
+      const edgeKey = `${repo._id}->${depId}`;
+
+      if (!edgeSet.has(edgeKey)) {
+        edges.push({
+          from: repo._id.toString(),
+          to: depId,
+          type: "uses"
+        });
+        edgeSet.add(edgeKey);
+      }
     }
 
-    // parent dependency chain (VERY IMPORTANT 🔥)
+    // 🔗 dependency → dependency (CHAIN 🔥)
     if (dep.parent) {
-      edges.push({
-        from: dep.parent,
-        to: dep.name,
-        type: "depends_on"
-      });
+      const parentId = dep.parent.toLowerCase();
+      const edgeKey = `${parentId}->${depId}`;
+
+      if (!edgeSet.has(edgeKey)) {
+        edges.push({
+          from: parentId,
+          to: depId,
+          type: "depends_on"
+        });
+        edgeSet.add(edgeKey);
+      }
     }
   });
 
-  // 🔴 Vulnerabilities
+  /* =========================
+     🔴 VULNERABILITY NODES
+  ========================= */
   vulns.forEach(v => {
-    const vulnId = `${v.package}_${v.cve || "vuln"}`;
+    if (!v?.package) return;
 
-    nodes.push({
-      id: vulnId,
-      label: v.package,
-      type: "vulnerability",
-      severity: v.severity,
-      color:
-        v.severity === "CRITICAL" ? "#ff0000" :
-        v.severity === "HIGH" ? "#ff4d4d" :
-        v.severity === "MEDIUM" ? "#ffa500" :
-        "#ffff00"
-    });
+    const pkg = v.package.toLowerCase();
+    const vulnId = `${pkg}_${v.cve || "vuln"}`;
 
-    edges.push({
-      from: v.package,
-      to: vulnId,
-      type: "has_vulnerability"
-    });
+    // 🔥 ensure dependency node exists (IMPORTANT FIX)
+    if (!nodeSet.has(pkg)) {
+      nodes.push({
+        id: pkg,
+        label: pkg,
+        type: "dependency",
+        size: 22,
+        color: "#4da6ff"
+      });
+      nodeSet.add(pkg);
+    }
+
+    // ✅ prevent duplicate vuln nodes
+    if (!nodeSet.has(vulnId)) {
+      nodes.push({
+        id: vulnId,
+        label: v.cve || pkg,
+        type: "vulnerability",
+        severity: v.severity,
+        size: 18,
+        color:
+          v.severity === "CRITICAL" ? "#ff0000" :
+          v.severity === "HIGH" ? "#ff4d4d" :
+          v.severity === "MEDIUM" ? "#ffa500" :
+          "#ffff00"
+      });
+
+      nodeSet.add(vulnId);
+    }
+
+    // 🔗 dependency → vulnerability
+    const edgeKey = `${pkg}->${vulnId}`;
+
+    if (!edgeSet.has(edgeKey)) {
+      edges.push({
+        from: pkg,
+        to: vulnId,
+        type: "has_vulnerability"
+      });
+
+      edgeSet.add(edgeKey);
+    }
   });
 
-  return { nodes, edges };
+  /* =========================
+     📊 STATS (BONUS 🔥)
+  ========================= */
+  const stats = {
+    totalNodes: nodes.length,
+    totalEdges: edges.length,
+    dependencies: nodes.filter(n => n.type === "dependency").length,
+    vulnerabilities: nodes.filter(n => n.type === "vulnerability").length
+  };
+
+  return { nodes, edges, stats };
 };

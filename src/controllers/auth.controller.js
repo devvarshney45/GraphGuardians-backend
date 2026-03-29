@@ -109,9 +109,10 @@ export const login = async (req, res) => {
 export const githubLogin = (req, res) => {
   console.log("🚀 GitHub OAuth started");
 
-  const state = req.query.state || "web"; // 🔥 web/app पहचान
+  const state = req.query.state || "web";
 
-  const redirectUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&scope=repo&state=${state}`;
+  const redirectUrl =
+    `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&scope=repo&state=${state}`;
 
   res.redirect(redirectUrl);
 };
@@ -120,12 +121,10 @@ export const githubLogin = (req, res) => {
 export const githubCallback = async (req, res) => {
   try {
     console.log("📥 GitHub Callback HIT");
-    console.log("Query:", req.query);
 
     const { code, state } = req.query;
 
     if (!code) {
-      console.log("❌ No code received");
       return res.redirect(`${process.env.FRONTEND_URL}/error`);
     }
 
@@ -147,7 +146,6 @@ export const githubCallback = async (req, res) => {
     const accessToken = tokenRes.data.access_token;
 
     if (!accessToken) {
-      console.log("❌ No access token");
       return res.redirect(`${process.env.FRONTEND_URL}/error`);
     }
 
@@ -163,12 +161,6 @@ export const githubCallback = async (req, res) => {
     const githubUser = userRes.data;
     const githubUsername = githubUser.login.toLowerCase();
 
-    console.log("👤 GitHub User:", githubUsername);
-    console.log("📧 GitHub Email:", githubUser.email);
-
-    /* =========================
-       🔥 FIND USER (EMAIL + ID)
-    ========================= */
     let user = null;
 
     if (githubUser.email) {
@@ -191,8 +183,6 @@ export const githubCallback = async (req, res) => {
         githubAccessToken: accessToken,
         avatar: githubUser.avatar_url
       });
-
-      console.log("🆕 New GitHub user created");
     }
 
     /* =========================
@@ -205,8 +195,6 @@ export const githubCallback = async (req, res) => {
       user.avatar = githubUser.avatar_url;
 
       await user.save();
-
-      console.log("✅ GitHub linked/updated");
     }
 
     /* =========================
@@ -219,10 +207,9 @@ export const githubCallback = async (req, res) => {
     let redirectUrl = "";
 
     if (state === "app") {
-      // 📱 MOBILE DEEP LINK
-      redirectUrl = `myapp://auth/success?token=${token}`;
+      // ✅ FIXED (IMPORTANT)
+      redirectUrl = `myapp://auth?token=${token}`;
     } else {
-      // 🌐 WEB
       redirectUrl = `${FRONTEND}/auth/success?token=${token}`;
     }
 
@@ -274,10 +261,7 @@ export const saveDeviceToken = async (req, res) => {
     });
 
   } catch (err) {
-    console.log("❌ Save device token error:", err.message);
-    res.status(500).json({
-      error: err.message
-    });
+    res.status(500).json({ error: err.message });
   }
 };
 
@@ -299,10 +283,7 @@ export const getProfile = async (req, res) => {
     });
 
   } catch (err) {
-    console.log("❌ getProfile error:", err.message);
-    res.status(500).json({
-      error: err.message
-    });
+    res.status(500).json({ error: err.message });
   }
 };
 
@@ -322,7 +303,6 @@ export const getMe = async (req, res) => {
     });
 
   } catch (err) {
-    console.log("❌ getMe error:", err.message);
     res.status(500).json({ error: err.message });
   }
 };

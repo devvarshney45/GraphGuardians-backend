@@ -1,7 +1,7 @@
 import axios from "axios";
 
 /* =========================
-   🧠 SIMPLE CACHE (IN-MEMORY)
+   🧠 CACHE (IMPROVED)
 ========================= */
 const aiCache = new Map();
 
@@ -26,9 +26,9 @@ const callAI = async (payload, retries = 2) => {
 
   } catch (err) {
     if (err.response?.status === 429 && retries > 0) {
-      console.log("⚠️ Rate limit hit... retrying");
+      console.log("⚠️ Rate limit... retrying");
 
-      await new Promise(r => setTimeout(r, 1500)); // 🔥 delay
+      await new Promise(r => setTimeout(r, 1500));
 
       return callAI(payload, retries - 1);
     }
@@ -43,22 +43,19 @@ const callAI = async (payload, retries = 2) => {
 export const generateAIInsights = async (vulnerabilities = []) => {
   try {
     if (!vulnerabilities.length) {
-      return [
-        {
-          package: "none",
-          explanation: "No vulnerabilities found",
-          risk: "Safe",
-          fix: "No action required",
-          bestPractice: "Keep dependencies updated"
-        }
-      ];
+      return {
+        summary: "No vulnerabilities found",
+        issues: []
+      };
     }
 
     /* =========================
-       🔥 CACHE KEY
+       🔥 CACHE KEY (STABLE)
     ========================= */
     const cacheKey = JSON.stringify(
-      vulnerabilities.map(v => `${v.package}-${v.severity}`)
+      vulnerabilities
+        .map(v => `${v.package}-${v.severity}`)
+        .sort() // 🔥 IMPORTANT FIX
     );
 
     if (aiCache.has(cacheKey)) {
@@ -72,14 +69,23 @@ export const generateAIInsights = async (vulnerabilities = []) => {
     const limited = vulnerabilities.slice(0, 10);
 
     const prompt = `
-Return ONLY JSON.
+You are a security expert.
 
-For each vulnerability:
-- package
-- explanation
-- risk
-- fix
-- bestPractice
+Return STRICT JSON:
+{
+  "summary": "...",
+  "issues": [
+    {
+      "package": "",
+      "explanation": "",
+      "risk": "",
+      "fix": "",
+      "bestPractice": ""
+    }
+  ]
+}
+
+Analyze:
 
 ${limited.map(v => `
 Package: ${v.package}
@@ -88,7 +94,7 @@ Severity: ${v.severity}
 `;
 
     /* =========================
-       📡 CALL AI (WITH RETRY)
+       📡 CALL AI
     ========================= */
     const response = await callAI({
       model: "gpt-4o-mini",
@@ -105,17 +111,20 @@ Severity: ${v.severity}
     try {
       parsed = JSON.parse(aiText);
     } catch {
-      parsed = limited.map(v => ({
-        package: v.package,
-        explanation: "Security issue",
-        risk: `${v.severity} vulnerability`,
-        fix: `npm update ${v.package}`,
-        bestPractice: "Update dependencies regularly"
-      }));
+      parsed = {
+        summary: "Security risks detected",
+        issues: limited.map(v => ({
+          package: v.package,
+          explanation: "Security issue",
+          risk: `${v.severity} vulnerability`,
+          fix: `npm update ${v.package}`,
+          bestPractice: "Keep dependencies updated"
+        }))
+      };
     }
 
     /* =========================
-       💾 SAVE CACHE
+       💾 CACHE SAVE
     ========================= */
     aiCache.set(cacheKey, parsed);
 
@@ -124,12 +133,15 @@ Severity: ${v.severity}
   } catch (err) {
     console.log("❌ AI failed, fallback used");
 
-    return vulnerabilities.slice(0, 10).map(v => ({
-      package: v.package,
-      explanation: "Security issue detected",
-      risk: `${v.severity || "unknown"} risk`,
-      fix: `npm install ${v.package}@latest`,
-      bestPractice: "Run npm audit"
-    }));
+    return {
+      summary: "AI unavailable",
+      issues: vulnerabilities.slice(0, 10).map(v => ({
+        package: v.package,
+        explanation: "Security issue detected",
+        risk: `${v.severity || "unknown"} risk`,
+        fix: `npm install ${v.package}@latest`,
+        bestPractice: "Run npm audit"
+      }))
+    };
   }
 };

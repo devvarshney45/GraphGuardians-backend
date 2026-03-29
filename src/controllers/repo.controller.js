@@ -1,5 +1,5 @@
 import Repo from "../models/repo.model.js";
-import User from "../models/user.model.js"; // ✅ ADD THIS
+import User from "../models/user.model.js";
 import axios from "axios";
 import { analyzeRepo } from "./analysis.controller.js";
 import { getInstallationToken } from "../services/githubApp.service.js";
@@ -69,7 +69,6 @@ export const addRepo = async (req, res) => {
     }
 
     const userId = req.user?._id?.toString();
-
     if (!userId) {
       return res.status(401).json({ msg: "Unauthorized" });
     }
@@ -79,12 +78,8 @@ export const addRepo = async (req, res) => {
     let token = null;
     let isAppToken = false;
 
-    /* ========================= FIX START 🔥 ========================= */
+    /* ========================= TOKEN FETCH ========================= */
     const fullUser = await User.findById(userId);
-
-    console.log("👤 USER:", fullUser?.email);
-    console.log("🔑 GitHub Token:", fullUser?.githubAccessToken);
-    console.log("📦 Installation ID:", fullUser?.installationId);
 
     if (fullUser?.installationId) {
       try {
@@ -98,17 +93,42 @@ export const addRepo = async (req, res) => {
     if (!token && fullUser?.githubAccessToken) {
       token = fullUser.githubAccessToken;
     }
-    /* ========================= FIX END 🔥 ========================= */
 
     if (!token) {
       return res.status(401).json({ msg: "GitHub not connected" });
     }
 
+    /* ========================= 🔥 FIX START ========================= */
     const existing = await Repo.findOne({ url: cleanUrl, userId });
-    if (existing) {
-      return res.status(400).json({ msg: "Repo already added" });
-    }
 
+    if (existing) {
+      console.log("♻️ Repo already exists → reuse");
+
+      // 🔥 OPTIONAL: trigger rescan (best UX)
+      setImmediate(() => {
+        analyzeRepo(
+          {
+            body: {
+              url: cleanUrl,
+              repoId: existing._id,
+              token
+            },
+            user: { id: userId },
+            app: req.app
+          },
+          { json: () => {} }
+        );
+      });
+
+      return res.status(200).json({
+        repo: existing,
+        alreadyExists: true,
+        msg: "Repo already exists, opening dashboard"
+      });
+    }
+    /* ========================= 🔥 FIX END ========================= */
+
+    /* ========================= FETCH REPO ========================= */
     const repoData = await axios.get(
       `https://api.github.com/repos/${owner}/${repo}`,
       { headers: getHeaders(token, isAppToken) }
@@ -125,11 +145,16 @@ export const addRepo = async (req, res) => {
       status: "scanning"
     });
 
+    /* ========================= WEBHOOK ========================= */
     createWebhook(owner, repo, token, isAppToken).catch(() => {});
 
-    res.status(201).json({ repo: newRepo });
+    /* ========================= RESPONSE ========================= */
+    res.status(201).json({
+      repo: newRepo,
+      alreadyExists: false
+    });
 
-    // 🔥 background scan
+    /* ========================= BACKGROUND SCAN ========================= */
     setImmediate(() => {
       analyzeRepo(
         {
@@ -147,6 +172,11 @@ export const addRepo = async (req, res) => {
 
   } catch (err) {
     console.log("❌ Add repo error:", err.message);
+
+    if (err.message === "Invalid GitHub URL") {
+      return res.status(400).json({ msg: err.message });
+    }
+
     res.status(500).json({ error: "Failed to add repo" });
   }
 };
@@ -208,7 +238,7 @@ export const deleteRepo = async (req, res) => {
   }
 };
 
-/* ========================= GET REPO DIFF (NEW 🔥) ========================= */
+/* ========================= GET REPO DIFF ========================= */
 export const getRepoDiff = async (req, res) => {
   try {
     const { repoId } = req.params;
@@ -219,7 +249,6 @@ export const getRepoDiff = async (req, res) => {
       return res.status(404).json({ msg: "Repo not found" });
     }
 
-    // ✅ SAFE RESPONSE (UI BREAK NA HO)
     res.json({
       message: "No comparison data yet",
       changes: [],

@@ -171,14 +171,48 @@ export const analyzeRepo = async (req, res) => {
     } catch {}
 
     /* ========================= AI ========================= */
-    let aiInsights = [];
+  /* ========================= AI ========================= */
+let aiInsights = {};
 
-    try {
-      aiInsights = await generateAIInsights(formattedVulns, uniqueDeps);
-    } catch {
-      console.log("⚠️ AI failed");
-    }
+try {
+  console.log("🧠 Generating AI insights...");
 
+  // 🔥 1. SAFE LIMIT (avoid overload)
+  const limitedVulns = formattedVulns.slice(0, 50); // max 50 (enough context)
+
+  // 🔥 2. GROUP DATA (IMPORTANT)
+  const summaryText = limitedVulns.map(v => 
+    `${v.package} - ${v.description} (${v.severity})`
+  ).join("\n");
+
+  // 🔥 3. BUILD SMART PAYLOAD
+  const aiPayload = {
+    totalDependencies: uniqueDeps.length,
+    totalVulnerabilities: formattedVulns.length,
+    severity: {
+      critical: formattedVulns.filter(v => v.severity === "CRITICAL").length,
+      high: formattedVulns.filter(v => v.severity === "HIGH").length,
+      medium: formattedVulns.filter(v => v.severity === "MEDIUM").length,
+      low: formattedVulns.filter(v => v.severity === "LOW").length
+    },
+    data: summaryText
+  };
+
+  // 🔥 4. SINGLE AI CALL (MAIN FIX 💯)
+  aiInsights = await generateAIInsights(aiPayload);
+
+  console.log("✅ AI insights generated");
+
+} catch (err) {
+  console.log("⚠️ AI failed:", err.message);
+
+  // 🔥 5. FALLBACK (NEVER BREAK UI)
+  aiInsights = {
+    summary: "AI insights not available",
+    risks: [],
+    fixes: []
+  };
+}
     /* ========================= PUSH NOTIFICATION ========================= */
     try {
       const user = await User.findById(repo.userId);

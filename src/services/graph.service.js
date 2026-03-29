@@ -3,13 +3,21 @@ export const buildGraph = (deps = [], vulns = [], repo = null) => {
   const edges = [];
 
   const nodeSet = new Set();
-  const edgeSet = new Set(); // 🔥 duplicate edge prevent
+  const edgeSet = new Set();
+
+  /* =========================
+     🧠 NORMALIZER (VERY IMPORTANT)
+  ========================= */
+  const normalize = (str) =>
+    String(str || "").toLowerCase().trim();
 
   /* =========================
      🟢 REPO NODE
   ========================= */
-  if (repo) {
-    const repoId = repo._id.toString();
+  let repoId = null;
+
+  if (repo?._id) {
+    repoId = repo._id.toString();
 
     nodes.push({
       id: repoId,
@@ -22,14 +30,14 @@ export const buildGraph = (deps = [], vulns = [], repo = null) => {
   }
 
   /* =========================
-     🟡 DEPENDENCY NODES
+     🟡 DEPENDENCIES
   ========================= */
   deps.forEach(dep => {
     if (!dep?.name) return;
 
-    const depId = dep.name.toLowerCase();
+    const depId = normalize(dep.name);
 
-    // ✅ prevent duplicate nodes
+    /* ✅ ADD DEP NODE */
     if (!nodeSet.has(depId)) {
       nodes.push({
         id: depId,
@@ -38,17 +46,16 @@ export const buildGraph = (deps = [], vulns = [], repo = null) => {
         size: 22,
         color: "#4da6ff"
       });
-
       nodeSet.add(depId);
     }
 
-    // 🔗 repo → dependency
-    if (repo) {
-      const edgeKey = `${repo._id}->${depId}`;
+    /* 🔗 REPO → DEP */
+    if (repoId) {
+      const edgeKey = `${repoId}->${depId}`;
 
       if (!edgeSet.has(edgeKey)) {
         edges.push({
-          from: repo._id.toString(),
+          from: repoId,
           to: depId,
           type: "uses"
         });
@@ -56,9 +63,22 @@ export const buildGraph = (deps = [], vulns = [], repo = null) => {
       }
     }
 
-    // 🔗 dependency → dependency (CHAIN 🔥)
+    /* 🔗 DEP → DEP (CHAIN) */
     if (dep.parent) {
-      const parentId = dep.parent.toLowerCase();
+      const parentId = normalize(dep.parent);
+
+      // 🔥 ensure parent node exists
+      if (!nodeSet.has(parentId)) {
+        nodes.push({
+          id: parentId,
+          label: parentId,
+          type: "dependency",
+          size: 22,
+          color: "#4da6ff"
+        });
+        nodeSet.add(parentId);
+      }
+
       const edgeKey = `${parentId}->${depId}`;
 
       if (!edgeSet.has(edgeKey)) {
@@ -73,15 +93,17 @@ export const buildGraph = (deps = [], vulns = [], repo = null) => {
   });
 
   /* =========================
-     🔴 VULNERABILITY NODES
+     🔴 VULNERABILITIES
   ========================= */
   vulns.forEach(v => {
     if (!v?.package) return;
 
-    const pkg = v.package.toLowerCase();
-    const vulnId = `${pkg}_${v.cve || "vuln"}`;
+    const pkg = normalize(v.package);
 
-    // 🔥 ensure dependency node exists (IMPORTANT FIX)
+    // 🔥 UNIQUE VULN ID FIX
+    const vulnId = `${pkg}_${v.cve || v._id || Math.random()}`;
+
+    /* 🔥 ENSURE DEP NODE EXISTS */
     if (!nodeSet.has(pkg)) {
       nodes.push({
         id: pkg,
@@ -93,7 +115,7 @@ export const buildGraph = (deps = [], vulns = [], repo = null) => {
       nodeSet.add(pkg);
     }
 
-    // ✅ prevent duplicate vuln nodes
+    /* ✅ ADD VULN NODE */
     if (!nodeSet.has(vulnId)) {
       nodes.push({
         id: vulnId,
@@ -111,7 +133,7 @@ export const buildGraph = (deps = [], vulns = [], repo = null) => {
       nodeSet.add(vulnId);
     }
 
-    // 🔗 dependency → vulnerability
+    /* 🔗 DEP → VULN */
     const edgeKey = `${pkg}->${vulnId}`;
 
     if (!edgeSet.has(edgeKey)) {
@@ -120,19 +142,38 @@ export const buildGraph = (deps = [], vulns = [], repo = null) => {
         to: vulnId,
         type: "has_vulnerability"
       });
-
       edgeSet.add(edgeKey);
+    }
+
+    /* 💎 OPTIONAL: REPO → VULN DIRECT */
+    if (repoId) {
+      const repoEdgeKey = `${repoId}->${vulnId}`;
+
+      if (!edgeSet.has(repoEdgeKey)) {
+        edges.push({
+          from: repoId,
+          to: vulnId,
+          type: "has_vulnerability"
+        });
+        edgeSet.add(repoEdgeKey);
+      }
     }
   });
 
   /* =========================
-     📊 STATS (BONUS 🔥)
+     📊 STATS
   ========================= */
   const stats = {
     totalNodes: nodes.length,
     totalEdges: edges.length,
     dependencies: nodes.filter(n => n.type === "dependency").length,
-    vulnerabilities: nodes.filter(n => n.type === "vulnerability").length
+    vulnerabilities: nodes.filter(n => n.type === "vulnerability").length,
+    severity: {
+      LOW: nodes.filter(n => n.severity === "LOW").length,
+      MEDIUM: nodes.filter(n => n.severity === "MEDIUM").length,
+      HIGH: nodes.filter(n => n.severity === "HIGH").length,
+      CRITICAL: nodes.filter(n => n.severity === "CRITICAL").length
+    }
   };
 
   return { nodes, edges, stats };

@@ -45,18 +45,23 @@ const fetchFile = async (owner, repo, filePath, token) => {
 };
 
 /* =========================
-   🌳 TREE BUILDER (FIXED)
+   🌳 TREE BUILDER (CHAIN READY 🔥)
 ========================= */
 export const buildTreeFromLockfile = (lockfile) => {
   const tree = [];
+
+  // 🔥 track full path instead of only name
   const visited = new Set();
 
-  const traverse = (deps, parent = null) => {
+  const traverse = (deps, parent = null, path = []) => {
     if (!deps) return;
 
     for (const [name, data] of Object.entries(deps)) {
       const version = data.version || "unknown";
-      const key = `${name}@${version}`;
+
+      // 🔥 unique path-based key (chain safe)
+      const currentPath = [...path, name];
+      const key = currentPath.join("->") + `@${version}`;
 
       if (visited.has(key)) continue;
       visited.add(key);
@@ -64,11 +69,14 @@ export const buildTreeFromLockfile = (lockfile) => {
       tree.push({
         name,
         version,
-        parent
+        parent,                 // 🔥 direct parent
+        path: currentPath.join("->"), // 🔥 full chain path
+        depth: currentPath.length     // 🔥 depth level
       });
 
+      // 🔥 RECURSION (CHAIN BUILD)
       if (data.dependencies) {
-        traverse(data.dependencies, name);
+        traverse(data.dependencies, name, currentPath);
       }
     }
   };
@@ -79,7 +87,7 @@ export const buildTreeFromLockfile = (lockfile) => {
 };
 
 /* =========================
-   🌐 FALLBACK
+   🌐 FALLBACK (CHAIN SAFE)
 ========================= */
 export const buildFallbackTree = (pkg) => {
   const deps = pkg?.dependencies || {};
@@ -87,7 +95,9 @@ export const buildFallbackTree = (pkg) => {
   return Object.entries(deps).map(([name, version]) => ({
     name,
     version: version || "latest",
-    parent: null
+    parent: null,
+    path: name,
+    depth: 1
   }));
 };
 
@@ -118,7 +128,7 @@ export const getDependencyTree = async (repoUrl, token = null) => {
     let tree = [];
 
     if (lockfile?.dependencies) {
-      console.log("✅ LOCKFILE MODE");
+      console.log("✅ LOCKFILE MODE (CHAIN ENABLED)");
       tree = buildTreeFromLockfile(lockfile);
     } else {
       console.log("⚠️ FALLBACK MODE");

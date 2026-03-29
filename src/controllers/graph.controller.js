@@ -10,17 +10,18 @@ const getSeverityColor = (severity) => {
     case "CRITICAL": return "#ff0000";
     case "HIGH": return "#ff4d4d";
     case "MEDIUM": return "#ffa500";
-    case "LOW": return "#ffff00";
+    case "LOW": return "#22c55e";
     default: return "#999";
   }
 };
 
 /* =========================
-   🚀 GET GRAPH (FINAL FIXED TREE)
+   🚀 GET GRAPH (NORMAL + CHAIN)
 ========================= */
 export const getGraph = async (req, res) => {
   try {
     const { repoId } = req.params;
+    const { type } = req.query; // 🔥 IMPORTANT
 
     /* =========================
        🔍 Repo Check
@@ -49,51 +50,79 @@ export const getGraph = async (req, res) => {
     const edgeSet = new Set();
 
     /* =========================
-       🟢 REPO NODE
+       🟢 REPO NODE (ONLY NORMAL)
     ========================= */
-    const repoNode = {
-      id: repoIdStr,
-      label: repo.name,
-      type: "repo",
-      size: 30
-    };
+    if (type !== "chain") {
+      const repoNode = {
+        id: repoIdStr,
+        label: repo.name,
+        type: "repo",
+        size: 30
+      };
 
-    nodes.push(repoNode);
-    nodeSet.add(repoIdStr);
+      nodes.push(repoNode);
+      nodeSet.add(repoIdStr);
+    }
 
     /* =========================
-       🟡 DEPENDENCY NODES (FIXED 🔥)
+       🟡 DEPENDENCY NODES
     ========================= */
-    const dependencyNodes = deps.map(dep => ({
-      id: dep.name,
-      label: dep.name,
-      type: "dependency",
-      size: 22
-    }));
+    deps.forEach(dep => {
+      const depId = dep.name.toLowerCase();
 
-    dependencyNodes.forEach(dep => {
-      if (!nodeSet.has(dep.id)) {
-        nodes.push(dep);
-        nodeSet.add(dep.id);
+      if (!nodeSet.has(depId)) {
+        nodes.push({
+          id: depId,
+          label: dep.name,
+          type: "dependency",
+          size: 22
+        });
+        nodeSet.add(depId);
       }
 
-      // Repo → Dependency edge
-      const edgeKey = `${repoIdStr}-${dep.id}`;
-      if (!edgeSet.has(edgeKey)) {
-        edges.push({
-          from: repoIdStr,
-          to: dep.id,
-          type: "root"
-        });
-        edgeSet.add(edgeKey);
+      /* =========================
+         🟢 NORMAL GRAPH
+      ========================= */
+      if (type !== "chain") {
+        const edgeKey = `${repoIdStr}-${depId}`;
+
+        if (!edgeSet.has(edgeKey)) {
+          edges.push({
+            from: repoIdStr,
+            to: depId,
+            type: "root"
+          });
+          edgeSet.add(edgeKey);
+        }
       }
     });
 
     /* =========================
+       🔥 CHAIN GRAPH (DEP → DEP)
+    ========================= */
+    if (type === "chain") {
+      deps.forEach(dep => {
+        if (!dep.parent) return;
+
+        const from = dep.parent.toLowerCase();
+        const to = dep.name.toLowerCase();
+
+        const edgeKey = `${from}-${to}`;
+
+        if (!edgeSet.has(edgeKey)) {
+          edges.push({
+            from,
+            to,
+            type: "chain"
+          });
+          edgeSet.add(edgeKey);
+        }
+      });
+    }
+
+    /* =========================
        🔴 VULNERABILITY NODES
     ========================= */
-    const vulnerabilityNodes = [];
-
     const severityCount = {
       LOW: 0,
       MEDIUM: 0,
@@ -102,31 +131,29 @@ export const getGraph = async (req, res) => {
     };
 
     vulns.forEach(v => {
-      const vulnId = `${v.package}_${v.cve || Math.random()}`;
+      const depName = v.package.toLowerCase();
+      const vulnId = `${depName}_${v.cve || Math.random()}`;
 
       severityCount[v.severity] =
         (severityCount[v.severity] || 0) + 1;
 
-      const vulnNode = {
-        id: vulnId,
-        label: v.cve || "No CVE",
-        type: "vulnerability",
-        severity: v.severity,
-        color: getSeverityColor(v.severity),
-        size: 18
-      };
-
       if (!nodeSet.has(vulnId)) {
-        vulnerabilityNodes.push(vulnNode);
-        nodes.push(vulnNode);
+        nodes.push({
+          id: vulnId,
+          label: v.cve || "No CVE",
+          type: "vulnerability",
+          severity: v.severity,
+          color: getSeverityColor(v.severity),
+          size: 18
+        });
         nodeSet.add(vulnId);
       }
 
-      // Dependency → Vulnerability edge (🔥 MAIN FIX)
-      const edgeKey = `${v.package}-${vulnId}`;
+      const edgeKey = `${depName}-${vulnId}`;
+
       if (!edgeSet.has(edgeKey)) {
         edges.push({
-          from: v.package,
+          from: depName,
           to: vulnId,
           type: "vuln"
         });
@@ -141,8 +168,8 @@ export const getGraph = async (req, res) => {
       version: latestVersion,
       totalNodes: nodes.length,
       totalEdges: edges.length,
-      dependencies: dependencyNodes.length,
-      vulnerabilities: vulnerabilityNodes.length,
+      dependencies: deps.length,
+      vulnerabilities: vulns.length,
       severity: severityCount
     };
 

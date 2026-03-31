@@ -11,12 +11,7 @@ import { buildTreeFromLockfile } from "../services/dependencyTree.service.js";
 import { checkVulnerabilities } from "../services/vulnerability.service.js";
 import { calculateRisk } from "../utils/risk.util.js";
 
-// ❌ REMOVED Neo4j
-// import { pushToNeo4j } from "../services/neo4j.service.js";
-
-// ✅ TigerGraph only
 import { pushToTigerGraph } from "../services/tigergraph.service.js";
-
 import { generateAIInsights } from "../services/ai.service.js";
 import { sendNotification } from "../services/firebase.service.js";
 
@@ -111,6 +106,8 @@ export const analyzeRepo = async (req, res) => {
       console.log("⚠️ Tree build failed");
     }
 
+    console.log("🌳 TREE SAMPLE:", tree[0]);
+
     /* ========================= UNIQUE DEPS ========================= */
     const seen = new Set();
 
@@ -126,10 +123,12 @@ export const analyzeRepo = async (req, res) => {
         versionGroup: newVersion,
         name: d.name.toLowerCase(),
         version: String(d.version || "unknown"),
+        parent: d.parent ? d.parent.toLowerCase() : null, // 🔥 FIX
         type: "prod"
       }));
 
-    console.log(`📦 Dependencies: ${uniqueDeps.length}`);
+    console.log(`📦 Dependencies Saved: ${uniqueDeps.length}`);
+    console.log("📦 SAMPLE DEP:", uniqueDeps[0]);
 
     await Dependency.insertMany(uniqueDeps, { ordered: false }).catch(() => {});
 
@@ -171,48 +170,39 @@ export const analyzeRepo = async (req, res) => {
     } catch {}
 
     /* ========================= AI ========================= */
-  /* ========================= AI ========================= */
-let aiInsights = {};
+    let aiInsights = {};
 
-try {
-  console.log("🧠 Generating AI insights...");
+    try {
+      console.log("🧠 AI START");
 
-  // 🔥 1. SAFE LIMIT (avoid overload)
-  const limitedVulns = formattedVulns.slice(0, 50); // max 50 (enough context)
+      const limited = formattedVulns.slice(0, 50);
 
-  // 🔥 2. GROUP DATA (IMPORTANT)
-  const summaryText = limitedVulns.map(v => 
-    `${v.package} - ${v.description} (${v.severity})`
-  ).join("\n");
+      const payload = {
+        totalDependencies: uniqueDeps.length,
+        totalVulnerabilities: formattedVulns.length,
+        severity: {
+          critical: formattedVulns.filter(v => v.severity === "CRITICAL").length,
+          high: formattedVulns.filter(v => v.severity === "HIGH").length,
+          medium: formattedVulns.filter(v => v.severity === "MEDIUM").length,
+          low: formattedVulns.filter(v => v.severity === "LOW").length
+        },
+        data: limited.map(v => `${v.package} (${v.severity})`).join("\n")
+      };
 
-  // 🔥 3. BUILD SMART PAYLOAD
-  const aiPayload = {
-    totalDependencies: uniqueDeps.length,
-    totalVulnerabilities: formattedVulns.length,
-    severity: {
-      critical: formattedVulns.filter(v => v.severity === "CRITICAL").length,
-      high: formattedVulns.filter(v => v.severity === "HIGH").length,
-      medium: formattedVulns.filter(v => v.severity === "MEDIUM").length,
-      low: formattedVulns.filter(v => v.severity === "LOW").length
-    },
-    data: summaryText
-  };
+      aiInsights = await generateAIInsights(payload);
 
-  // 🔥 4. SINGLE AI CALL (MAIN FIX 💯)
-  aiInsights = await generateAIInsights(aiPayload);
+      console.log("✅ AI DONE");
 
-  console.log("✅ AI insights generated");
+    } catch (err) {
+      console.log("⚠️ AI FAILED:", err.message);
 
-} catch (err) {
-  console.log("⚠️ AI failed:", err.message);
+      aiInsights = {
+        summary: "AI unavailable",
+        risks: [],
+        fixes: []
+      };
+    }
 
-  // 🔥 5. FALLBACK (NEVER BREAK UI)
-  aiInsights = {
-    summary: "AI insights not available",
-    risks: [],
-    fixes: []
-  };
-}
     /* ========================= PUSH NOTIFICATION ========================= */
     try {
       const user = await User.findById(repo.userId);
@@ -228,43 +218,27 @@ try {
       console.log("❌ Push failed:", err.message);
     }
 
-    /* ========================= GRAPH ========================= */
-// 🔥 IMPORTANT CHANGE: tree bhi pass karna hai TigerGraph ko
+    /* ========================= TIGERGRAPH ========================= */
+    const depEdges = tree
+      .filter(d => d.parent)
+      .map(d => ({
+        from: d.parent.toLowerCase(),
+        to: d.name.toLowerCase()
+      }));
 
-/* ========================= GRAPH ========================= */
-
-// 🔥 BUILD DEP-DEP CHAINS
-const depEdges = tree
-  .filter(d => d.parent)
-  .map(d => ({
-    from: d.parent.toLowerCase(),
-    to: d.name.toLowerCase()
-  }));
-
-// 🔥 ONLY TigerGraph (CHAIN ENABLED)
-await pushToTigerGraph(
-  repoIdStr,
-
-  // 📦 dependencies
-  uniqueDeps.map(d => ({
-    name: d.name,
-    version: d.version
-  })),
-
-  // 🚨 vulnerabilities
-  formattedVulns.map(v => ({
-    package: v.package,
-    cve: v.cve,
-    severity: v.severity,
-    description: v.description
-  })),
-
-  // 🔥 NEW: dependency chain edges
-  depEdges
-).catch(() => {
-  console.log("⚠️ TigerGraph failed");
-});
-    
+    await pushToTigerGraph(
+      repoIdStr,
+      uniqueDeps.map(d => ({ name: d.name, version: d.version })),
+      formattedVulns.map(v => ({
+        package: v.package,
+        cve: v.cve,
+        severity: v.severity,
+        description: v.description
+      })),
+      depEdges
+    ).catch(() => {
+      console.log("⚠️ TigerGraph failed");
+    });
 
     /* ========================= RISK ========================= */
     const risk = calculateRisk(formattedVulns);

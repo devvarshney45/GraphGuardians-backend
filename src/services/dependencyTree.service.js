@@ -46,23 +46,55 @@ const fetchFile = async (owner, repo, filePath, token) => {
 };
 
 /* =========================
-   🌳 TREE BUILDER (FINAL 🔥)
+   🌳 LOCKFILE v2/v3 SUPPORT 🔥
 ========================= */
-export const buildTreeFromLockfile = (lockfile) => {
+const buildFromPackages = (packages) => {
   const tree = [];
   const visited = new Set();
 
-  const traverse = (deps, parent = null, path = []) => {
+  Object.entries(packages).forEach(([path, data]) => {
+    if (!data?.name) return;
+
+    const name = data.name.toLowerCase();
+    const version = data.version || "unknown";
+
+    // parent extract from path
+    const parts = path.split("node_modules/");
+    const parent =
+      parts.length > 2
+        ? parts[parts.length - 2].split("/").pop()
+        : null;
+
+    const key = `${name}@${version}_${parent || "root"}`;
+    if (visited.has(key)) return;
+    visited.add(key);
+
+    tree.push({
+      name,
+      version,
+      parent: parent ? parent.toLowerCase() : null,
+      path,
+      depth: path.split("node_modules").length
+    });
+  });
+
+  return tree;
+};
+
+/* =========================
+   🌳 OLD LOCKFILE SUPPORT
+========================= */
+const buildFromDependencies = (deps) => {
+  const tree = [];
+  const visited = new Set();
+
+  const traverse = (deps, parent = null) => {
     if (!deps) return;
 
     for (const [name, data] of Object.entries(deps)) {
       const version = data.version || "unknown";
 
-      const currentPath = [...path, name];
-
-      // ✅ FIXED KEY (parent-based deduplication)
       const key = `${name.toLowerCase()}@${version}_${parent || "root"}`;
-
       if (visited.has(key)) continue;
       visited.add(key);
 
@@ -70,28 +102,23 @@ export const buildTreeFromLockfile = (lockfile) => {
         name: name.toLowerCase(),
         version,
         parent: parent ? parent.toLowerCase() : null,
-        path: currentPath.join("->"),
-        depth: currentPath.length
+        path: name,
+        depth: parent ? 2 : 1
       });
 
-      // ✅ SUPPORT BOTH dependency formats
-      const childDeps = data.dependencies || data.requires;
-
-      if (childDeps && typeof childDeps === "object") {
-        traverse(childDeps, name, currentPath);
+      // 🔥 FIX: only real dependencies
+      if (data.dependencies) {
+        traverse(data.dependencies, name);
       }
     }
   };
 
-  if (lockfile?.dependencies) {
-    traverse(lockfile.dependencies);
-  }
-
+  traverse(deps);
   return tree;
 };
 
 /* =========================
-   🌐 FALLBACK (FINAL 🔥)
+   🌐 FALLBACK
 ========================= */
 export const buildFallbackTree = (pkg) => {
   const deps = {
@@ -110,7 +137,7 @@ export const buildFallbackTree = (pkg) => {
 };
 
 /* =========================
-   🚀 MAIN
+   🚀 MAIN TREE BUILDER
 ========================= */
 export const getDependencyTree = async (repoUrl, token = null) => {
   try {
@@ -136,25 +163,40 @@ export const getDependencyTree = async (repoUrl, token = null) => {
     let tree = [];
 
     /* =========================
-       🔥 PRIORITY: LOCKFILE
+       🔥 LOCKFILE v2/v3
     ========================= */
-    if (lockfile?.dependencies) {
-      console.log("✅ LOCKFILE MODE (FULL CHAIN)");
+    if (lockfile?.packages) {
+      console.log("✅ LOCKFILE v2/v3 MODE");
 
-      tree = buildTreeFromLockfile(lockfile);
+      tree = buildFromPackages(lockfile.packages);
+    }
 
-      // 🔥 fallback safety (rare edge case)
-      if (!tree.length) {
-        console.log("⚠️ Empty lockfile tree → fallback");
-        tree = buildFallbackTree(pkg);
-      }
+    /* =========================
+       🔥 LOCKFILE v1
+    ========================= */
+    else if (lockfile?.dependencies) {
+      console.log("✅ LOCKFILE v1 MODE");
 
-    } else {
-      console.log("⚠️ FALLBACK MODE (NO LOCKFILE)");
+      tree = buildFromDependencies(lockfile.dependencies);
+    }
+
+    /* =========================
+       ⚠️ FALLBACK
+    ========================= */
+    else {
+      console.log("⚠️ FALLBACK MODE");
       tree = buildFallbackTree(pkg);
     }
 
-    console.log(`🌳 Final Tree Size: ${tree.length}`);
+    /* =========================
+       🛑 SAFETY CHECK
+    ========================= */
+    if (!tree.length) {
+      console.log("⚠️ Empty tree → fallback forced");
+      tree = buildFallbackTree(pkg);
+    }
+
+    console.log(`🌳 FINAL TREE SIZE: ${tree.length}`);
 
     return tree;
 

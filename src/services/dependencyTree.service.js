@@ -39,18 +39,17 @@ const fetchFile = async (owner, repo, filePath, token) => {
     const content = Buffer.from(res.data.content, "base64").toString("utf-8");
 
     return JSON.parse(content);
-  } catch {
+  } catch (err) {
+    console.log(`⚠️ Failed to fetch ${filePath}`);
     return null;
   }
 };
 
 /* =========================
-   🌳 TREE BUILDER (CHAIN READY 🔥)
+   🌳 TREE BUILDER (FINAL 🔥)
 ========================= */
 export const buildTreeFromLockfile = (lockfile) => {
   const tree = [];
-
-  // 🔥 track full path instead of only name
   const visited = new Set();
 
   const traverse = (deps, parent = null, path = []) => {
@@ -59,41 +58,50 @@ export const buildTreeFromLockfile = (lockfile) => {
     for (const [name, data] of Object.entries(deps)) {
       const version = data.version || "unknown";
 
-      // 🔥 unique path-based key (chain safe)
       const currentPath = [...path, name];
-      const key = currentPath.join("->") + `@${version}`;
+
+      // ✅ FIXED KEY (parent-based deduplication)
+      const key = `${name.toLowerCase()}@${version}_${parent || "root"}`;
 
       if (visited.has(key)) continue;
       visited.add(key);
 
       tree.push({
-        name,
+        name: name.toLowerCase(),
         version,
-        parent,                 // 🔥 direct parent
-        path: currentPath.join("->"), // 🔥 full chain path
-        depth: currentPath.length     // 🔥 depth level
+        parent: parent ? parent.toLowerCase() : null,
+        path: currentPath.join("->"),
+        depth: currentPath.length
       });
 
-      // 🔥 RECURSION (CHAIN BUILD)
-      if (data.dependencies) {
-        traverse(data.dependencies, name, currentPath);
+      // ✅ SUPPORT BOTH dependency formats
+      const childDeps = data.dependencies || data.requires;
+
+      if (childDeps && typeof childDeps === "object") {
+        traverse(childDeps, name, currentPath);
       }
     }
   };
 
-  traverse(lockfile.dependencies);
+  if (lockfile?.dependencies) {
+    traverse(lockfile.dependencies);
+  }
 
   return tree;
 };
 
 /* =========================
-   🌐 FALLBACK (CHAIN SAFE)
+   🌐 FALLBACK (FINAL 🔥)
 ========================= */
 export const buildFallbackTree = (pkg) => {
-  const deps = pkg?.dependencies || {};
+  const deps = {
+    ...(pkg?.dependencies || {}),
+    ...(pkg?.devDependencies || {}),
+    ...(pkg?.peerDependencies || {})
+  };
 
   return Object.entries(deps).map(([name, version]) => ({
-    name,
+    name: name.toLowerCase(),
     version: version || "latest",
     parent: null,
     path: name,
@@ -106,7 +114,7 @@ export const buildFallbackTree = (pkg) => {
 ========================= */
 export const getDependencyTree = async (repoUrl, token = null) => {
   try {
-    console.log("⚡ FAST TREE START");
+    console.log("⚡ TREE BUILD START");
 
     const { owner, repo } = parseRepo(repoUrl);
 
@@ -121,21 +129,32 @@ export const getDependencyTree = async (repoUrl, token = null) => {
     ]);
 
     if (!pkg) {
-      console.log("⚠️ No package.json");
+      console.log("⚠️ No package.json found");
       return [];
     }
 
     let tree = [];
 
+    /* =========================
+       🔥 PRIORITY: LOCKFILE
+    ========================= */
     if (lockfile?.dependencies) {
-      console.log("✅ LOCKFILE MODE (CHAIN ENABLED)");
+      console.log("✅ LOCKFILE MODE (FULL CHAIN)");
+
       tree = buildTreeFromLockfile(lockfile);
+
+      // 🔥 fallback safety (rare edge case)
+      if (!tree.length) {
+        console.log("⚠️ Empty lockfile tree → fallback");
+        tree = buildFallbackTree(pkg);
+      }
+
     } else {
-      console.log("⚠️ FALLBACK MODE");
+      console.log("⚠️ FALLBACK MODE (NO LOCKFILE)");
       tree = buildFallbackTree(pkg);
     }
 
-    console.log(`🌳 Tree size: ${tree.length}`);
+    console.log(`🌳 Final Tree Size: ${tree.length}`);
 
     return tree;
 

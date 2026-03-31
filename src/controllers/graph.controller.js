@@ -16,16 +16,13 @@ const getSeverityColor = (severity) => {
 };
 
 /* =========================
-   🚀 GET GRAPH (NORMAL + CHAIN)
+   🚀 GET GRAPH
 ========================= */
 export const getGraph = async (req, res) => {
   try {
     const { repoId } = req.params;
-    const { type } = req.query; // 🔥 IMPORTANT
+    const { type } = req.query;
 
-    /* =========================
-       🔍 Repo Check
-    ========================= */
     const repo = await Repo.findById(repoId).lean();
     if (!repo) {
       return res.status(404).json({ msg: "Repo not found" });
@@ -50,22 +47,20 @@ export const getGraph = async (req, res) => {
     const edgeSet = new Set();
 
     /* =========================
-       🟢 REPO NODE (ONLY NORMAL)
+       🟢 REPO NODE
     ========================= */
     if (type !== "chain") {
-      const repoNode = {
+      nodes.push({
         id: repoIdStr,
         label: repo.name,
         type: "repo",
         size: 30
-      };
-
-      nodes.push(repoNode);
+      });
       nodeSet.add(repoIdStr);
     }
 
     /* =========================
-       🟡 DEPENDENCY NODES
+       🟡 DEPENDENCIES
     ========================= */
     deps.forEach(dep => {
       const depId = dep.name.toLowerCase();
@@ -73,16 +68,14 @@ export const getGraph = async (req, res) => {
       if (!nodeSet.has(depId)) {
         nodes.push({
           id: depId,
-          label: dep.name,
+          label: `${dep.name}@${dep.version}`,
           type: "dependency",
-          size: 22
+          size: 22,
+          color: "#4da6ff"
         });
         nodeSet.add(depId);
       }
 
-      /* =========================
-         🟢 NORMAL GRAPH
-      ========================= */
       if (type !== "chain") {
         const edgeKey = `${repoIdStr}-${depId}`;
 
@@ -98,7 +91,7 @@ export const getGraph = async (req, res) => {
     });
 
     /* =========================
-       🔥 CHAIN GRAPH (DEP → DEP)
+       🔥 CHAIN EDGES
     ========================= */
     if (type === "chain") {
       deps.forEach(dep => {
@@ -106,6 +99,18 @@ export const getGraph = async (req, res) => {
 
         const from = dep.parent.toLowerCase();
         const to = dep.name.toLowerCase();
+
+        // 🔥 ensure parent exists
+        if (!nodeSet.has(from)) {
+          nodes.push({
+            id: from,
+            label: from,
+            type: "dependency",
+            size: 22,
+            color: "#4da6ff"
+          });
+          nodeSet.add(from);
+        }
 
         const edgeKey = `${from}-${to}`;
 
@@ -121,7 +126,7 @@ export const getGraph = async (req, res) => {
     }
 
     /* =========================
-       🔴 VULNERABILITY NODES
+       🔴 VULNERABILITIES
     ========================= */
     const severityCount = {
       LOW: 0,
@@ -137,6 +142,19 @@ export const getGraph = async (req, res) => {
       severityCount[v.severity] =
         (severityCount[v.severity] || 0) + 1;
 
+      /* 🔥 IMPORTANT FIX: ensure dependency exists */
+      if (!nodeSet.has(depName)) {
+        nodes.push({
+          id: depName,
+          label: depName,
+          type: "dependency",
+          size: 22,
+          color: "#4da6ff"
+        });
+        nodeSet.add(depName);
+      }
+
+      /* 🔴 vuln node */
       if (!nodeSet.has(vulnId)) {
         nodes.push({
           id: vulnId,
@@ -162,20 +180,17 @@ export const getGraph = async (req, res) => {
     });
 
     /* =========================
-       📊 STATS
+       📊 STATS FIX
     ========================= */
     const stats = {
       version: latestVersion,
       totalNodes: nodes.length,
       totalEdges: edges.length,
-      dependencies: deps.length,
-      vulnerabilities: vulns.length,
+      dependencies: nodes.filter(n => n.type === "dependency").length,
+      vulnerabilities: nodes.filter(n => n.type === "vulnerability").length,
       severity: severityCount
     };
 
-    /* =========================
-       🚀 RESPONSE
-    ========================= */
     return res.json({
       success: true,
       version: latestVersion,

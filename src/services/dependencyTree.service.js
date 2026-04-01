@@ -15,7 +15,6 @@ const parseRepo = (url) => {
       owner: parts[0],
       repo: parts[1].replace(".git", "")
     };
-
   } catch {
     return {};
   }
@@ -23,7 +22,7 @@ const parseRepo = (url) => {
 
 const getHeaders = (token) => ({
   Accept: "application/vnd.github+json",
-  ...(token && { Authorization: `token ${token}` }) // ✅ FIXED
+  ...(token && { Authorization: `token ${token}` })
 });
 
 /* =========================
@@ -31,7 +30,8 @@ const getHeaders = (token) => ({
 ========================= */
 const fetchFile = async (owner, repo, filePath, token) => {
   try {
-    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`; // ✅ FIXED
+    // ✅ FIX 1: URL must be in backticks
+    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
 
     const res = await axios.get(url, {
       headers: getHeaders(token)
@@ -42,7 +42,8 @@ const fetchFile = async (owner, repo, filePath, token) => {
     return JSON.parse(content);
 
   } catch (err) {
-    console.log(`⚠️ Failed to fetch ${filePath}`); // ✅ FIXED
+    // ✅ FIX 2: console.log must use backticks
+    console.log(`⚠️ Failed to fetch ${filePath}`);
     return null;
   }
 };

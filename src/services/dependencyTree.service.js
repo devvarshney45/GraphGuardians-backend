@@ -26,7 +26,7 @@ const getHeaders = (token) => ({
 });
 
 /* =========================
-   📥 FETCH FILE
+   📥 FETCH FILE (SAFE)
 ========================= */
 const fetchFile = async (owner, repo, filePath, token) => {
   try {
@@ -35,6 +35,8 @@ const fetchFile = async (owner, repo, filePath, token) => {
     const res = await axios.get(url, {
       headers: getHeaders(token)
     });
+
+    if (!res?.data?.content) return null;
 
     const content = Buffer.from(res.data.content, "base64").toString("utf-8");
 
@@ -46,7 +48,14 @@ const fetchFile = async (owner, repo, filePath, token) => {
 };
 
 /* =========================
-   🌳 LOCKFILE v2/v3 SUPPORT 🔥
+   🔧 VERSION CLEANER
+========================= */
+const cleanVersion = (v = "") => {
+  return String(v).replace(/[\^~><=]/g, "").split(" ")[0];
+};
+
+/* =========================
+   🌳 LOCKFILE v2/v3 SUPPORT
 ========================= */
 const buildFromPackages = (packages) => {
   const tree = [];
@@ -56,13 +65,13 @@ const buildFromPackages = (packages) => {
     if (!data?.name) return;
 
     const name = data.name.toLowerCase();
-    const version = data.version || "unknown";
+    const version = cleanVersion(data.version || "unknown");
 
-    // parent extract from path
-    const parts = path.split("node_modules/");
+    // 🔥 FIX: better parent detection
+    const segments = path.split("node_modules/").filter(Boolean);
     const parent =
-      parts.length > 2
-        ? parts[parts.length - 2].split("/").pop()
+      segments.length > 1
+        ? segments[segments.length - 2]
         : null;
 
     const key = `${name}@${version}_${parent || "root"}`;
@@ -72,9 +81,11 @@ const buildFromPackages = (packages) => {
     tree.push({
       name,
       version,
+      cleanVersion: version,
       parent: parent ? parent.toLowerCase() : null,
       path,
-      depth: path.split("node_modules").length
+      depth: segments.length,
+      type: parent ? "TRANSITIVE" : "DIRECT"
     });
   });
 
@@ -82,17 +93,17 @@ const buildFromPackages = (packages) => {
 };
 
 /* =========================
-   🌳 OLD LOCKFILE SUPPORT
+   🌳 LOCKFILE v1 SUPPORT
 ========================= */
 const buildFromDependencies = (deps) => {
   const tree = [];
   const visited = new Set();
 
-  const traverse = (deps, parent = null) => {
+  const traverse = (deps, parent = null, depth = 1) => {
     if (!deps) return;
 
     for (const [name, data] of Object.entries(deps)) {
-      const version = data.version || "unknown";
+      const version = cleanVersion(data.version || "unknown");
 
       const key = `${name.toLowerCase()}@${version}_${parent || "root"}`;
       if (visited.has(key)) continue;
@@ -101,14 +112,15 @@ const buildFromDependencies = (deps) => {
       tree.push({
         name: name.toLowerCase(),
         version,
+        cleanVersion: version,
         parent: parent ? parent.toLowerCase() : null,
         path: name,
-        depth: parent ? 2 : 1
+        depth,
+        type: parent ? "TRANSITIVE" : "DIRECT"
       });
 
-      // 🔥 FIX: only real dependencies
       if (data.dependencies) {
-        traverse(data.dependencies, name);
+        traverse(data.dependencies, name, depth + 1);
       }
     }
   };
@@ -118,7 +130,7 @@ const buildFromDependencies = (deps) => {
 };
 
 /* =========================
-   🌐 FALLBACK
+   🌐 FALLBACK (SAFE)
 ========================= */
 export const buildFallbackTree = (pkg) => {
   const deps = {
@@ -129,10 +141,12 @@ export const buildFallbackTree = (pkg) => {
 
   return Object.entries(deps).map(([name, version]) => ({
     name: name.toLowerCase(),
-    version: version || "latest",
+    version: cleanVersion(version || "latest"),
+    cleanVersion: cleanVersion(version || "latest"),
     parent: null,
     path: name,
-    depth: 1
+    depth: 1,
+    type: "DIRECT"
   }));
 };
 
@@ -167,7 +181,6 @@ export const getDependencyTree = async (repoUrl, token = null) => {
     ========================= */
     if (lockfile?.packages) {
       console.log("✅ LOCKFILE v2/v3 MODE");
-
       tree = buildFromPackages(lockfile.packages);
     }
 
@@ -176,7 +189,6 @@ export const getDependencyTree = async (repoUrl, token = null) => {
     ========================= */
     else if (lockfile?.dependencies) {
       console.log("✅ LOCKFILE v1 MODE");
-
       tree = buildFromDependencies(lockfile.dependencies);
     }
 
@@ -189,16 +201,29 @@ export const getDependencyTree = async (repoUrl, token = null) => {
     }
 
     /* =========================
-       🛑 SAFETY CHECK
+       🛑 FINAL SAFETY
     ========================= */
     if (!tree.length) {
       console.log("⚠️ Empty tree → fallback forced");
       tree = buildFallbackTree(pkg);
     }
 
-    console.log(`🌳 FINAL TREE SIZE: ${tree.length}`);
+    /* =========================
+       🔥 FINAL DEDUP (GLOBAL)
+    ========================= */
+    const unique = [];
+    const seen = new Set();
 
-    return tree;
+    for (const d of tree) {
+      const key = `${d.name}@${d.cleanVersion}_${d.parent || "root"}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(d);
+    }
+
+    console.log(`🌳 FINAL TREE SIZE: ${unique.length}`);
+
+    return unique;
 
   } catch (err) {
     console.log("❌ Tree error:", err.message);

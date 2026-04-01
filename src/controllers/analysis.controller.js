@@ -311,7 +311,7 @@ const emitResult = (req, repoIdStr, repo, risk, deps, vulns, aiInsights = []) =>
 const io = req.app.get("io");
 
 if (io) {
-io.to(repoIdStr).emit(scan-${repoIdStr}, {
+io.to(repoIdStr).emit(`scan-${repoIdStr}`, {
 repo,
 stats: {
 riskScore: risk,

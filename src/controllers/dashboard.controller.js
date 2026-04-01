@@ -8,38 +8,31 @@ export const getDashboard = async (req, res) => {
   try {
     const { repoId } = req.params;
 
-    /* =========================
-       🔥 FIX 1: FORCE STRING ID
-    ========================= */
-    const repoIdStr = String(repoId);
+    const repoObjectId = new mongoose.Types.ObjectId(repoId);
+    const repoIdStr = repoId.toString();
 
     /* =========================
-       🔍 Repo check
+       🔍 Repo check (FIXED)
     ========================= */
-    const repo = await Repo.findById(repoIdStr).lean();
+    const repo = await Repo.findById(repoObjectId).lean();
 
     if (!repo) {
       return res.status(404).json({ msg: "Repo not found" });
     }
 
-    /* =========================
-       🔐 Ownership check
-    ========================= */
     if (repo.userId.toString() !== req.user.id) {
       return res.status(403).json({ msg: "Unauthorized" });
     }
 
     /* =========================
-       🚀 EARLY RETURN
+       ⏳ SCAN NOT DONE
     ========================= */
     if (repo.status !== "scanned") {
       return res.json({
         repo: {
           id: repo._id,
           name: repo.name,
-          url: repo.url,
           status: repo.status,
-          lastScanned: repo.lastScanned || null,
           version: repo.scanCount || 0
         },
         stats: null,
@@ -49,27 +42,30 @@ export const getDashboard = async (req, res) => {
       });
     }
 
-    /* =========================
-       🔥 VERSION FIX
-    ========================= */
     const latestVersion = Number(repo.scanCount || 0);
     const prevVersion = latestVersion > 1 ? latestVersion - 1 : null;
 
     /* =========================
-       ⚡ PARALLEL FETCH (FIXED)
+       🔥 FLEXIBLE FETCH (IMPORTANT)
     ========================= */
     const [dependencies, vulnerabilities, alerts] = await Promise.all([
       Dependency.find({
-        repoId: repoIdStr,                 // 🔥 FIX
-        versionGroup: latestVersion        // 🔥 FIX
-      }).lean(),
+        repoId: repoIdStr,
+        versionGroup: { $lte: latestVersion } // 🔥 FIX
+      })
+        .sort({ versionGroup: -1 })
+        .limit(1000)
+        .lean(),
 
       Vulnerability.find({
-        repoId: repoIdStr,                 // 🔥 FIX
-        versionGroup: latestVersion        // 🔥 FIX
-      }).lean(),
+        repoId: repoIdStr,
+        versionGroup: { $lte: latestVersion } // 🔥 FIX
+      })
+        .sort({ versionGroup: -1 })
+        .limit(1000)
+        .lean(),
 
-      Alert.find({ repoId: repoIdStr })    // 🔥 FIX
+      Alert.find({ repoId: repoIdStr })
         .sort({ createdAt: -1 })
         .limit(5)
         .lean()
@@ -79,21 +75,20 @@ export const getDashboard = async (req, res) => {
     console.log("🚨 Vulnerabilities:", vulnerabilities.length);
 
     /* =========================
-       🔥 DEP COUNT FIX (IMPORTANT)
+       📊 COUNTS (SMART)
     ========================= */
     const vulnCount = vulnerabilities.length;
 
     let dependencyCount = dependencies.length;
 
-    // 🔥 fallback (jab dependency save na ho)
-    if (dependencyCount === 0 && vulnerabilities.length > 0) {
+    if (dependencyCount === 0 && vulnCount > 0) {
       dependencyCount = new Set(
         vulnerabilities.map(v => v.package)
       ).size;
     }
 
     /* =========================
-       📊 SEVERITY COUNT
+       📊 SEVERITY
     ========================= */
     let critical = 0, high = 0, medium = 0, low = 0;
 
@@ -105,7 +100,7 @@ export const getDashboard = async (req, res) => {
     }
 
     /* =========================
-       🧠 RISK SCORE (STABLE)
+       🧠 RISK
     ========================= */
     let riskScore =
       critical * 3 +
@@ -115,13 +110,10 @@ export const getDashboard = async (req, res) => {
 
     riskScore = Math.min(10, Math.max(0, Number(riskScore.toFixed(2))));
 
-    /* =========================
-       ❤️ HEALTH
-    ========================= */
     const health = Math.max(0, 100 - riskScore * 10);
 
     /* =========================
-       🔥 TOP VULNS (FIXED SORT)
+       🔥 TOP VULNS
     ========================= */
     const severityOrder = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
 
@@ -130,7 +122,7 @@ export const getDashboard = async (req, res) => {
       .slice(0, 5);
 
     /* =========================
-       🔁 TREND FIX
+       🔁 TREND
     ========================= */
     let trend = 0;
 
@@ -155,13 +147,19 @@ export const getDashboard = async (req, res) => {
     }
 
     /* =========================
-       📊 FINAL RESPONSE
+       🚨 SAFETY FALLBACK
+    ========================= */
+    if (!dependencies.length && !vulnerabilities.length) {
+      console.log("⚠️ Empty dashboard → possible scan delay");
+    }
+
+    /* =========================
+       📊 RESPONSE
     ========================= */
     return res.json({
       repo: {
         id: repo._id,
         name: repo.name,
-        url: repo.url,
         status: repo.status,
         lastScanned: repo.lastScanned,
         version: latestVersion
@@ -170,7 +168,7 @@ export const getDashboard = async (req, res) => {
       stats: {
         riskScore,
         health,
-        dependencies: dependencyCount,   // 🔥 FIXED
+        dependencies: dependencyCount,
         vulnerabilities: vulnCount,
         trend
       },

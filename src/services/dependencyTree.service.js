@@ -23,7 +23,7 @@ return {};
 
 const getHeaders = (token) => ({
 Accept: "application/vnd.github+json",
-...(token && { Authorization: token ${token} })
+...(token && { Authorization: `token ${token}` })
 });
 
 /* =========================

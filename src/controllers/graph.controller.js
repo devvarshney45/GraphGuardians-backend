@@ -24,9 +24,7 @@ export const getGraph = async (req, res) => {
     const { type } = req.query;
 
     const repo = await Repo.findById(repoId).lean();
-    if (!repo) {
-      return res.status(404).json({ msg: "Repo not found" });
-    }
+    if (!repo) return res.status(404).json({ msg: "Repo not found" });
 
     if (repo.userId.toString() !== req.user.id) {
       return res.status(403).json({ msg: "Unauthorized" });
@@ -54,7 +52,8 @@ export const getGraph = async (req, res) => {
         id: repoIdStr,
         label: repo.name,
         type: "repo",
-        size: 30
+        size: 32,
+        color: "#00e5ff"
       });
       nodeSet.add(repoIdStr);
     }
@@ -65,13 +64,16 @@ export const getGraph = async (req, res) => {
     deps.forEach(dep => {
       const depId = dep.name.toLowerCase();
 
+      const isVuln = vulns.some(v => v.package.toLowerCase() === depId);
+
       if (!nodeSet.has(depId)) {
         nodes.push({
           id: depId,
           label: `${dep.name}@${dep.version}`,
           type: "dependency",
-          size: 22,
-          color: "#4da6ff"
+          size: isVuln ? 26 : 22, // 🔥 highlight vulnerable deps
+          color: isVuln ? "#ff4d4d" : "#4da6ff",
+          isVulnerable: isVuln
         });
         nodeSet.add(depId);
       }
@@ -83,7 +85,8 @@ export const getGraph = async (req, res) => {
           edges.push({
             from: repoIdStr,
             to: depId,
-            type: "root"
+            type: "root",
+            label: "depends_on"
           });
           edgeSet.add(edgeKey);
         }
@@ -100,7 +103,7 @@ export const getGraph = async (req, res) => {
         const from = dep.parent.toLowerCase();
         const to = dep.name.toLowerCase();
 
-        // 🔥 ensure parent exists
+        // ensure parent exists
         if (!nodeSet.has(from)) {
           nodes.push({
             id: from,
@@ -118,7 +121,8 @@ export const getGraph = async (req, res) => {
           edges.push({
             from,
             to,
-            type: "chain"
+            type: "chain",
+            label: "depends_on"
           });
           edgeSet.add(edgeKey);
         }
@@ -142,19 +146,19 @@ export const getGraph = async (req, res) => {
       severityCount[v.severity] =
         (severityCount[v.severity] || 0) + 1;
 
-      /* 🔥 IMPORTANT FIX: ensure dependency exists */
+      // ensure dependency exists
       if (!nodeSet.has(depName)) {
         nodes.push({
           id: depName,
           label: depName,
           type: "dependency",
-          size: 22,
-          color: "#4da6ff"
+          size: 24,
+          color: "#ff4d4d"
         });
         nodeSet.add(depName);
       }
 
-      /* 🔴 vuln node */
+      // vuln node
       if (!nodeSet.has(vulnId)) {
         nodes.push({
           id: vulnId,
@@ -173,14 +177,15 @@ export const getGraph = async (req, res) => {
         edges.push({
           from: depName,
           to: vulnId,
-          type: "vuln"
+          type: "vuln",
+          label: "has_vulnerability"
         });
         edgeSet.add(edgeKey);
       }
     });
 
     /* =========================
-       📊 STATS FIX
+       📊 STATS
     ========================= */
     const stats = {
       version: latestVersion,

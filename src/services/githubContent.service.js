@@ -20,7 +20,7 @@ const content = Buffer.from(res.data.content, "base64").toString("utf-8");
 return JSON.parse(content);
 
 } catch (err) {
-console.log(❌ Failed to fetch ${filePath});
+console.log('❌ Failed to fetch ${filePath}`);
 return null;
 }
 };

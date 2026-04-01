@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Repo from "../models/repo.model.js";
 import Dependency from "../models/dependency.model.js";
 import Vulnerability from "../models/vulnerability.model.js";
@@ -8,9 +9,14 @@ export const getDashboard = async (req, res) => {
     const { repoId } = req.params;
 
     /* =========================
+       🔥 FIX 1: FORCE STRING ID
+    ========================= */
+    const repoIdStr = String(repoId);
+
+    /* =========================
        🔍 Repo check
     ========================= */
-    const repo = await Repo.findById(repoId).lean();
+    const repo = await Repo.findById(repoIdStr).lean();
 
     if (!repo) {
       return res.status(404).json({ msg: "Repo not found" });
@@ -24,7 +30,7 @@ export const getDashboard = async (req, res) => {
     }
 
     /* =========================
-       🚀 EARLY RETURN (IMPORTANT FIX)
+       🚀 EARLY RETURN
     ========================= */
     if (repo.status !== "scanned") {
       return res.json({
@@ -44,43 +50,50 @@ export const getDashboard = async (req, res) => {
     }
 
     /* =========================
-       🔥 VERSION SYSTEM
+       🔥 VERSION FIX
     ========================= */
-    const latestVersion = repo.scanCount || 0;
+    const latestVersion = Number(repo.scanCount || 0);
     const prevVersion = latestVersion > 1 ? latestVersion - 1 : null;
 
     /* =========================
-       ⚡ Parallel Queries
+       ⚡ PARALLEL FETCH (FIXED)
     ========================= */
     const [dependencies, vulnerabilities, alerts] = await Promise.all([
       Dependency.find({
-        repoId,
-        versionGroup: latestVersion
+        repoId: repoIdStr,                 // 🔥 FIX
+        versionGroup: latestVersion        // 🔥 FIX
       }).lean(),
 
       Vulnerability.find({
-        repoId,
-        versionGroup: latestVersion
+        repoId: repoIdStr,                 // 🔥 FIX
+        versionGroup: latestVersion        // 🔥 FIX
       }).lean(),
 
-      Alert.find({ repoId })
+      Alert.find({ repoId: repoIdStr })    // 🔥 FIX
         .sort({ createdAt: -1 })
         .limit(5)
         .lean()
     ]);
 
+    console.log("📦 Dependencies:", dependencies.length);
+    console.log("🚨 Vulnerabilities:", vulnerabilities.length);
+
     /* =========================
-       🔥 FIX: DEPENDENCY COUNT LOGIC
+       🔥 DEP COUNT FIX (IMPORTANT)
     ========================= */
     const vulnCount = vulnerabilities.length;
 
-    const dependencyCount =
-      dependencies.length > 0
-        ? dependencies.length
-        : new Set(vulnerabilities.map(v => v.package)).size;
+    let dependencyCount = dependencies.length;
+
+    // 🔥 fallback (jab dependency save na ho)
+    if (dependencyCount === 0 && vulnerabilities.length > 0) {
+      dependencyCount = new Set(
+        vulnerabilities.map(v => v.package)
+      ).size;
+    }
 
     /* =========================
-       📊 Severity Count
+       📊 SEVERITY COUNT
     ========================= */
     let critical = 0, high = 0, medium = 0, low = 0;
 
@@ -92,7 +105,7 @@ export const getDashboard = async (req, res) => {
     }
 
     /* =========================
-       🧠 Risk Score
+       🧠 RISK SCORE (STABLE)
     ========================= */
     let riskScore =
       critical * 3 +
@@ -100,30 +113,30 @@ export const getDashboard = async (req, res) => {
       medium * 1 +
       low * 0.5;
 
-    riskScore = Math.min(10, Math.max(1, riskScore));
+    riskScore = Math.min(10, Math.max(0, Number(riskScore.toFixed(2))));
 
     /* =========================
-       ❤️ Health
+       ❤️ HEALTH
     ========================= */
     const health = Math.max(0, 100 - riskScore * 10);
 
     /* =========================
-       🔥 TOP VULNERABILITIES
+       🔥 TOP VULNS (FIXED SORT)
     ========================= */
     const severityOrder = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
 
-    const topVulnerabilities = vulnerabilities
+    const topVulnerabilities = [...vulnerabilities]
       .sort((a, b) => severityOrder[b.severity] - severityOrder[a.severity])
       .slice(0, 5);
 
     /* =========================
-       🔁 TREND
+       🔁 TREND FIX
     ========================= */
     let trend = 0;
 
     if (prevVersion) {
       const prevVulns = await Vulnerability.find({
-        repoId,
+        repoId: repoIdStr,
         versionGroup: prevVersion
       }).lean();
 
@@ -136,9 +149,9 @@ export const getDashboard = async (req, res) => {
         else prevScore += 0.5;
       }
 
-      prevScore = Math.min(10, Math.max(1, prevScore));
+      prevScore = Math.min(10, Math.max(0, prevScore));
 
-      trend = riskScore - prevScore;
+      trend = Number((riskScore - prevScore).toFixed(2));
     }
 
     /* =========================
@@ -157,7 +170,7 @@ export const getDashboard = async (req, res) => {
       stats: {
         riskScore,
         health,
-        dependencies: dependencyCount,
+        dependencies: dependencyCount,   // 🔥 FIXED
         vulnerabilities: vulnCount,
         trend
       },

@@ -30,7 +30,6 @@ const getHeaders = (token) => ({
 ========================= */
 const fetchFile = async (owner, repo, filePath, token) => {
   try {
-    // ✅ FIX 1: URL must be in backticks
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
 
     const res = await axios.get(url, {
@@ -42,14 +41,13 @@ const fetchFile = async (owner, repo, filePath, token) => {
     return JSON.parse(content);
 
   } catch (err) {
-    // ✅ FIX 2: console.log must use backticks
     console.log(`⚠️ Failed to fetch ${filePath}`);
     return null;
   }
 };
 
 /* =========================
-🌳 TREE BUILDER (FINAL 🔥)
+🌳 TREE BUILDER
 ========================= */
 export const buildTreeFromLockfile = (lockfile) => {
   const tree = [];
@@ -92,7 +90,7 @@ export const buildTreeFromLockfile = (lockfile) => {
 };
 
 /* =========================
-🌐 FALLBACK (FINAL 🔥)
+🌐 FALLBACK
 ========================= */
 export const buildFallbackTree = (pkg) => {
   const deps = {
@@ -142,12 +140,12 @@ export const getDependencyTree = async (repoUrl, token = null) => {
       tree = buildTreeFromLockfile(lockfile);
 
       if (!tree.length) {
-        console.log("⚠️ Empty lockfile tree → fallback");
+        console.log("⚠️ Empty lockfile → fallback");
         tree = buildFallbackTree(pkg);
       }
 
     } else {
-      console.log("⚠️ FALLBACK MODE (NO LOCKFILE)");
+      console.log("⚠️ FALLBACK MODE");
       tree = buildFallbackTree(pkg);
     }
 

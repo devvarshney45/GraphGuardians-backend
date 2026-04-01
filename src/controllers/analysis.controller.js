@@ -6,7 +6,12 @@ import ScanHistory from "../models/scanHistory.model.js";
 import User from "../models/user.model.js";
 
 import { fetchFileFromGitHub } from "../services/githubContent.service.js";
-import { buildTreeFromLockfile } from "../services/dependencyTree.service.js";
+
+/* ❌ REMOVE OLD */
+// import { buildTreeFromLockfile } from "../services/dependencyTree.service.js";
+
+/* ✅ USE NEW */
+import { getDependencyTree } from "../services/dependencyTree.service.js";
 
 import { checkVulnerabilities } from "../services/vulnerability.service.js";
 import { calculateRisk } from "../utils/risk.util.js";
@@ -49,21 +54,21 @@ export const analyzeRepo = async (req, res) => {
 
     console.log(`🚀 SCAN START: ${repo.name}`);
 
-    /* ========================= FETCH FILES ========================= */
-    let lockfile = null;
-    let pkg = null;
+    /* ========================= TREE BUILD (FIXED 🔥) ========================= */
+    let tree = [];
 
     try {
-      [lockfile, pkg] = await Promise.all([
-        fetchFileFromGitHub(url, "package-lock.json", token),
-        fetchFileFromGitHub(url, "package.json", token)
-      ]);
-    } catch {
-      console.log("⚠️ GitHub fetch failed");
+      tree = await getDependencyTree(url, token); // 🔥 MAIN FIX
+    } catch (err) {
+      console.log("⚠️ Tree build failed:", err.message);
     }
 
-    /* ========================= NO PACKAGE ========================= */
-    if (!pkg) {
+    console.log(`🌳 TREE SIZE: ${tree.length}`);
+
+    /* ========================= NO TREE ========================= */
+    if (!tree.length) {
+      console.log("⚠️ Empty tree → aborting safely");
+
       const updatedRepo = await Repo.findByIdAndUpdate(
         repoId,
         {
@@ -82,46 +87,23 @@ export const analyzeRepo = async (req, res) => {
       return response.json({ success: true, repo: updatedRepo });
     }
 
-    /* ========================= TREE ========================= */
-    let tree = [];
-
-    try {
-      if (lockfile?.dependencies) {
-        console.log("✅ LOCKFILE MODE");
-        tree = buildTreeFromLockfile(lockfile);
-      } else {
-        console.log("⚠️ FALLBACK MODE");
-        const deps = pkg.dependencies || {};
-
-        tree = Object.entries(deps).map(([name, version]) => ({
-          name: name.toLowerCase(),
-          version: version || "latest",
-          parent: null
-        }));
-      }
-    } catch {
-      console.log("⚠️ Tree build failed");
-    }
-
-    console.log(`🌳 TREE SIZE: ${tree.length}`);
-
     /* ========================= UNIQUE DEPS ========================= */
     const seen = new Set();
 
     const uniqueDeps = tree
       .filter(d => {
-        const key = `${d.name.toLowerCase()}@${d.version}`;
+        const key = `${d.name}@${d.version}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
       })
       .map(d => ({
-        repoId: repoIdStr, // 🔥 FIXED (STRING CONSISTENT)
+        repoId: repoIdStr,
         versionGroup: newVersion,
-        name: d.name.toLowerCase(),
+        name: d.name,
         version: String(d.version || "unknown"),
-        parent: d.parent ? d.parent.toLowerCase() : null,
-        type: d.parent ? "TRANSITIVE" : "DIRECT" // 🔥 FIX
+        parent: d.parent,
+        type: d.parent ? "TRANSITIVE" : "DIRECT"
       }));
 
     console.log(`📦 Dependencies Saved: ${uniqueDeps.length}`);
@@ -137,7 +119,7 @@ export const analyzeRepo = async (req, res) => {
       formattedVulns = vulns.map(v => ({
         repoId: repoIdStr,
         versionGroup: newVersion,
-        package: v.package.toLowerCase(),
+        package: v.package,
         version: String(v.version || ""),
         severity: v.severity,
         cve: v.cve,
@@ -170,9 +152,7 @@ export const analyzeRepo = async (req, res) => {
 
     try {
       aiInsights = await generateAIInsights(formattedVulns.slice(0, 20));
-    } catch {
-      aiInsights = [];
-    }
+    } catch {}
 
     /* ========================= PUSH ========================= */
     try {
@@ -191,8 +171,8 @@ export const analyzeRepo = async (req, res) => {
     const depEdges = tree
       .filter(d => d.parent)
       .map(d => ({
-        from: d.parent.toLowerCase(),
-        to: d.name.toLowerCase()
+        from: d.parent,
+        to: d.name
       }));
 
     await pushToTigerGraph(
@@ -267,6 +247,7 @@ export const analyzeRepo = async (req, res) => {
   }
 };
 
+/* ========================= SOCKET ========================= */
 const emitResult = (req, repoIdStr, repo, risk, deps, vulns, aiInsights = []) => {
   const io = req.app.get("io");
 

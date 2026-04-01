@@ -15,9 +15,6 @@ const getSeverityColor = (severity) => {
   }
 };
 
-/* =========================
-   🚀 GET GRAPH
-========================= */
 export const getGraph = async (req, res) => {
   try {
     const { repoId } = req.params;
@@ -31,12 +28,29 @@ export const getGraph = async (req, res) => {
     }
 
     const repoIdStr = repo._id.toString();
-    const latestVersion = repo.scanCount;
+    const latestVersion = Number(repo.scanCount || 0);
 
+    /* =========================
+       🔥 FIXED FETCH
+    ========================= */
     const [deps, vulns] = await Promise.all([
-      Dependency.find({ repoId, versionGroup: latestVersion }).lean(),
-      Vulnerability.find({ repoId, versionGroup: latestVersion }).lean()
+      Dependency.find({
+        repoId: repoIdStr,
+        versionGroup: { $lte: latestVersion }
+      })
+        .sort({ versionGroup: -1 })
+        .lean(),
+
+      Vulnerability.find({
+        repoId: repoIdStr,
+        versionGroup: { $lte: latestVersion }
+      })
+        .sort({ versionGroup: -1 })
+        .lean()
     ]);
+
+    console.log("📦 GRAPH DEPS:", deps.length);
+    console.log("🚨 GRAPH VULNS:", vulns.length);
 
     let nodes = [];
     let edges = [];
@@ -71,7 +85,7 @@ export const getGraph = async (req, res) => {
           id: depId,
           label: `${dep.name}@${dep.version}`,
           type: "dependency",
-          size: isVuln ? 26 : 22, // 🔥 highlight vulnerable deps
+          size: isVuln ? 26 : 22,
           color: isVuln ? "#ff4d4d" : "#4da6ff",
           isVulnerable: isVuln
         });
@@ -103,7 +117,6 @@ export const getGraph = async (req, res) => {
         const from = dep.parent.toLowerCase();
         const to = dep.name.toLowerCase();
 
-        // ensure parent exists
         if (!nodeSet.has(from)) {
           nodes.push({
             id: from,
@@ -141,12 +154,12 @@ export const getGraph = async (req, res) => {
 
     vulns.forEach(v => {
       const depName = v.package.toLowerCase();
-      const vulnId = `${depName}_${v.cve || Math.random()}`;
 
-      severityCount[v.severity] =
-        (severityCount[v.severity] || 0) + 1;
+      // 🔥 FIXED ID (stable)
+      const vulnId = `${depName}_${v.cve || v.severity}`;
 
-      // ensure dependency exists
+      severityCount[v.severity]++;
+
       if (!nodeSet.has(depName)) {
         nodes.push({
           id: depName,
@@ -158,7 +171,6 @@ export const getGraph = async (req, res) => {
         nodeSet.add(depName);
       }
 
-      // vuln node
       if (!nodeSet.has(vulnId)) {
         nodes.push({
           id: vulnId,
@@ -184,9 +196,6 @@ export const getGraph = async (req, res) => {
       }
     });
 
-    /* =========================
-       📊 STATS
-    ========================= */
     const stats = {
       version: latestVersion,
       totalNodes: nodes.length,

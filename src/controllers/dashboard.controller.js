@@ -1,194 +1,186 @@
-import mongoose from "mongoose";
 import Repo from "../models/repo.model.js";
 import Dependency from "../models/dependency.model.js";
 import Vulnerability from "../models/vulnerability.model.js";
 import Alert from "../models/alert.model.js";
 
 export const getDashboard = async (req, res) => {
-  try {
-    const { repoId } = req.params;
+try {
+const { repoId } = req.params;
 
-    const repoObjectId = new mongoose.Types.ObjectId(repoId);
-    const repoIdStr = repoId.toString();
+/* =========================  
+   🔍 Repo check  
+========================= */  
+const repo = await Repo.findById(repoId).lean();  
 
-    /* =========================
-       🔍 Repo check (FIXED)
-    ========================= */
-    const repo = await Repo.findById(repoObjectId).lean();
+if (!repo) {  
+  return res.status(404).json({ msg: "Repo not found" });  
+}  
 
-    if (!repo) {
-      return res.status(404).json({ msg: "Repo not found" });
-    }
+/* =========================  
+   🔐 Ownership check  
+========================= */  
+if (repo.userId.toString() !== req.user.id) {  
+  return res.status(403).json({ msg: "Unauthorized" });  
+}  
 
-    if (repo.userId.toString() !== req.user.id) {
-      return res.status(403).json({ msg: "Unauthorized" });
-    }
+/* =========================  
+   🚀 EARLY RETURN (IMPORTANT FIX)  
+========================= */  
+if (repo.status !== "scanned") {  
+  return res.json({  
+    repo: {  
+      id: repo._id,  
+      name: repo.name,  
+      url: repo.url,  
+      status: repo.status,  
+      lastScanned: repo.lastScanned || null,  
+      version: repo.scanCount || 0  
+    },  
+    stats: null,  
+    severity: null,  
+    topVulnerabilities: [],  
+    alerts: []  
+  });  
+}  
 
-    /* =========================
-       ⏳ SCAN NOT DONE
-    ========================= */
-    if (repo.status !== "scanned") {
-      return res.json({
-        repo: {
-          id: repo._id,
-          name: repo.name,
-          status: repo.status,
-          version: repo.scanCount || 0
-        },
-        stats: null,
-        severity: null,
-        topVulnerabilities: [],
-        alerts: []
-      });
-    }
+/* =========================  
+   🔥 VERSION SYSTEM  
+========================= */  
+const latestVersion = repo.scanCount || 0;  
+const prevVersion = latestVersion > 1 ? latestVersion - 1 : null;  
 
-    const latestVersion = Number(repo.scanCount || 0);
-    const prevVersion = latestVersion > 1 ? latestVersion - 1 : null;
+/* =========================  
+   ⚡ Parallel Queries  
+========================= */  
+const [dependencies, vulnerabilities, alerts] = await Promise.all([  
+  Dependency.find({  
+    repoId,  
+    versionGroup: latestVersion  
+  }).lean(),  
 
-    /* =========================
-       🔥 FLEXIBLE FETCH (IMPORTANT)
-    ========================= */
-    const [dependencies, vulnerabilities, alerts] = await Promise.all([
-      Dependency.find({
-        repoId: repoIdStr,
-        versionGroup: { $lte: latestVersion } // 🔥 FIX
-      })
-        .sort({ versionGroup: -1 })
-        .limit(1000)
-        .lean(),
+  Vulnerability.find({  
+    repoId,  
+    versionGroup: latestVersion  
+  }).lean(),  
 
-      Vulnerability.find({
-        repoId: repoIdStr,
-        versionGroup: { $lte: latestVersion } // 🔥 FIX
-      })
-        .sort({ versionGroup: -1 })
-        .limit(1000)
-        .lean(),
+  Alert.find({ repoId })  
+    .sort({ createdAt: -1 })  
+    .limit(5)  
+    .lean()  
+]);  
 
-      Alert.find({ repoId: repoIdStr })
-        .sort({ createdAt: -1 })
-        .limit(5)
-        .lean()
-    ]);
+/* =========================  
+   🔥 FIX: DEPENDENCY COUNT LOGIC  
+========================= */  
+const vulnCount = vulnerabilities.length;  
 
-    console.log("📦 Dependencies:", dependencies.length);
-    console.log("🚨 Vulnerabilities:", vulnerabilities.length);
+const dependencyCount =  
+  dependencies.length > 0  
+    ? dependencies.length  
+    : new Set(vulnerabilities.map(v => v.package)).size;  
 
-    /* =========================
-       📊 COUNTS (SMART)
-    ========================= */
-    const vulnCount = vulnerabilities.length;
+/* =========================  
+   📊 Severity Count  
+========================= */  
+let critical = 0, high = 0, medium = 0, low = 0;  
 
-    let dependencyCount = dependencies.length;
+for (const v of vulnerabilities) {  
+  if (v.severity === "CRITICAL") critical++;  
+  else if (v.severity === "HIGH") high++;  
+  else if (v.severity === "MEDIUM") medium++;  
+  else low++;  
+}  
 
-    if (dependencyCount === 0 && vulnCount > 0) {
-      dependencyCount = new Set(
-        vulnerabilities.map(v => v.package)
-      ).size;
-    }
+/* =========================  
+   🧠 Risk Score  
+========================= */  
+let riskScore =  
+  critical * 3 +  
+  high * 2 +  
+  medium * 1 +  
+  low * 0.5;  
 
-    /* =========================
-       📊 SEVERITY
-    ========================= */
-    let critical = 0, high = 0, medium = 0, low = 0;
+riskScore = Math.min(10, Math.max(1, riskScore));  
 
-    for (const v of vulnerabilities) {
-      if (v.severity === "CRITICAL") critical++;
-      else if (v.severity === "HIGH") high++;
-      else if (v.severity === "MEDIUM") medium++;
-      else low++;
-    }
+/* =========================  
+   ❤️ Health  
+========================= */  
+const health = Math.max(0, 100 - riskScore * 10);  
 
-    /* =========================
-       🧠 RISK
-    ========================= */
-    let riskScore =
-      critical * 3 +
-      high * 2 +
-      medium * 1 +
-      low * 0.5;
+/* =========================  
+   🔥 TOP VULNERABILITIES  
+========================= */  
+const severityOrder = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };  
 
-    riskScore = Math.min(10, Math.max(0, Number(riskScore.toFixed(2))));
+const topVulnerabilities = vulnerabilities  
+  .sort((a, b) => severityOrder[b.severity] - severityOrder[a.severity])  
+  .slice(0, 5);  
 
-    const health = Math.max(0, 100 - riskScore * 10);
+/* =========================  
+   🔁 TREND  
+========================= */  
+let trend = 0;  
 
-    /* =========================
-       🔥 TOP VULNS
-    ========================= */
-    const severityOrder = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+if (prevVersion) {  
+  const prevVulns = await Vulnerability.find({  
+    repoId,  
+    versionGroup: prevVersion  
+  }).lean();  
 
-    const topVulnerabilities = [...vulnerabilities]
-      .sort((a, b) => severityOrder[b.severity] - severityOrder[a.severity])
-      .slice(0, 5);
+  let prevScore = 0;  
 
-    /* =========================
-       🔁 TREND
-    ========================= */
-    let trend = 0;
+  for (const v of prevVulns) {  
+    if (v.severity === "CRITICAL") prevScore += 3;  
+    else if (v.severity === "HIGH") prevScore += 2;  
+    else if (v.severity === "MEDIUM") prevScore += 1;  
+    else prevScore += 0.5;  
+  }  
 
-    if (prevVersion) {
-      const prevVulns = await Vulnerability.find({
-        repoId: repoIdStr,
-        versionGroup: prevVersion
-      }).lean();
+  prevScore = Math.min(10, Math.max(1, prevScore));  
 
-      let prevScore = 0;
+  trend = riskScore - prevScore;  
+}  
 
-      for (const v of prevVulns) {
-        if (v.severity === "CRITICAL") prevScore += 3;
-        else if (v.severity === "HIGH") prevScore += 2;
-        else if (v.severity === "MEDIUM") prevScore += 1;
-        else prevScore += 0.5;
-      }
+/* =========================  
+   📊 FINAL RESPONSE  
+========================= */  
+return res.json({  
+  repo: {  
+    id: repo._id,  
+    name: repo.name,  
+    url: repo.url,  
+    status: repo.status,  
+    lastScanned: repo.lastScanned,  
+    version: latestVersion  
+  },  
 
-      prevScore = Math.min(10, Math.max(0, prevScore));
+  stats: {  
+    riskScore,  
+    health,  
+    dependencies: dependencyCount,  
+    vulnerabilities: vulnCount,  
+    trend  
+  },  
 
-      trend = Number((riskScore - prevScore).toFixed(2));
-    }
+  severity: {  
+    critical,  
+    high,  
+    medium,  
+    low  
+  },  
 
-    /* =========================
-       🚨 SAFETY FALLBACK
-    ========================= */
-    if (!dependencies.length && !vulnerabilities.length) {
-      console.log("⚠️ Empty dashboard → possible scan delay");
-    }
+  topVulnerabilities,  
+  alerts  
+});
 
-    /* =========================
-       📊 RESPONSE
-    ========================= */
-    return res.json({
-      repo: {
-        id: repo._id,
-        name: repo.name,
-        status: repo.status,
-        lastScanned: repo.lastScanned,
-        version: latestVersion
-      },
+} catch (err) {
+console.log("❌ Dashboard error:", err.message);
 
-      stats: {
-        riskScore,
-        health,
-        dependencies: dependencyCount,
-        vulnerabilities: vulnCount,
-        trend
-      },
+return res.status(500).json({  
+  error: "Failed to fetch dashboard"  
+});
 
-      severity: {
-        critical,
-        high,
-        medium,
-        low
-      },
-
-      topVulnerabilities,
-      alerts
-    });
-
-  } catch (err) {
-    console.log("❌ Dashboard error:", err.message);
-
-    return res.status(500).json({
-      error: "Failed to fetch dashboard"
-    });
-  }
+}
 };
+
+Update krke full do

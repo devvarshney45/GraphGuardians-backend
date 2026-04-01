@@ -1,4 +1,5 @@
 import axios from "axios";
+import { Buffer } from "buffer"; // 🔥 FIX 1
 
 /* =========================
 🔧 HELPERS
@@ -36,12 +37,18 @@ const fetchFile = async (owner, repo, filePath, token) => {
       headers: getHeaders(token)
     });
 
+    // 🔥 FIX 2: safe content check
+    if (!res.data?.content) {
+      console.log(`⚠️ No content in ${filePath}`);
+      return null;
+    }
+
     const content = Buffer.from(res.data.content, "base64").toString("utf-8");
 
     return JSON.parse(content);
 
   } catch (err) {
-    console.log(`⚠️ Failed to fetch ${filePath}`);
+    console.log(`⚠️ Failed to fetch ${filePath}:`, err.message);
     return null;
   }
 };
@@ -135,7 +142,7 @@ export const getDependencyTree = async (repoUrl, token = null) => {
     let tree = [];
 
     if (lockfile?.dependencies) {
-      console.log("✅ LOCKFILE MODE (FULL CHAIN)");
+      console.log("✅ LOCKFILE MODE");
 
       tree = buildTreeFromLockfile(lockfile);
 

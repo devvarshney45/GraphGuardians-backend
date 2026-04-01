@@ -5,14 +5,7 @@ import Alert from "../models/alert.model.js";
 import ScanHistory from "../models/scanHistory.model.js";
 import User from "../models/user.model.js";
 
-import { fetchFileFromGitHub } from "../services/githubContent.service.js";
-
-/* ❌ REMOVE OLD */
-// import { buildTreeFromLockfile } from "../services/dependencyTree.service.js";
-
-/* ✅ USE NEW */
 import { getDependencyTree } from "../services/dependencyTree.service.js";
-
 import { checkVulnerabilities } from "../services/vulnerability.service.js";
 import { calculateRisk } from "../utils/risk.util.js";
 
@@ -46,28 +39,26 @@ export const analyzeRepo = async (req, res) => {
       return response.status(403).json({ msg: "Unauthorized" });
     }
 
-    const repoIdStr = String(repoId);
+    const repoIdStr = repoId.toString();
+    const newVersion = Number(repo.scanCount || 0) + 1;
 
     await Repo.findByIdAndUpdate(repoId, { status: "scanning" });
 
-    const newVersion = Number(repo.scanCount || 0) + 1;
-
     console.log(`🚀 SCAN START: ${repo.name}`);
 
-    /* ========================= TREE BUILD (FIXED 🔥) ========================= */
+    /* ========================= TREE ========================= */
     let tree = [];
 
     try {
-      tree = await getDependencyTree(url, token); // 🔥 MAIN FIX
+      tree = await getDependencyTree(url, token);
     } catch (err) {
-      console.log("⚠️ Tree build failed:", err.message);
+      console.log("❌ Tree error:", err.message);
     }
 
-    console.log(`🌳 TREE SIZE: ${tree.length}`);
+    console.log("🌳 TREE SIZE:", tree.length);
 
-    /* ========================= NO TREE ========================= */
     if (!tree.length) {
-      console.log("⚠️ Empty tree → aborting safely");
+      console.log("⚠️ Empty tree fallback");
 
       const updatedRepo = await Repo.findByIdAndUpdate(
         repoId,
@@ -83,16 +74,15 @@ export const analyzeRepo = async (req, res) => {
       ).lean();
 
       emitResult(req, repoIdStr, updatedRepo, 0, 0, 0, []);
-
       return response.json({ success: true, repo: updatedRepo });
     }
 
-    /* ========================= UNIQUE DEPS ========================= */
+    /* ========================= UNIQUE DEPS (FIXED 🔥) ========================= */
     const seen = new Set();
 
     const uniqueDeps = tree
       .filter(d => {
-        const key = `${d.name}@${d.version}`;
+        const key = `${d.name.toLowerCase()}@${d.version}_${d.parent || "root"}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
@@ -100,17 +90,21 @@ export const analyzeRepo = async (req, res) => {
       .map(d => ({
         repoId: repoIdStr,
         versionGroup: newVersion,
-        name: d.name,
+        name: d.name.toLowerCase(),
         version: String(d.version || "unknown"),
-        parent: d.parent,
+        parent: d.parent ? d.parent.toLowerCase() : null,
         type: d.parent ? "TRANSITIVE" : "DIRECT"
       }));
 
-    console.log(`📦 Dependencies Saved: ${uniqueDeps.length}`);
+    console.log("📦 Dependencies:", uniqueDeps.length);
 
-    await Dependency.insertMany(uniqueDeps, { ordered: false }).catch(() => {});
+    try {
+      await Dependency.insertMany(uniqueDeps, { ordered: false });
+    } catch (err) {
+      console.log("⚠️ Dependency insert issue:", err.message);
+    }
 
-    /* ========================= VULNERABILITIES ========================= */
+    /* ========================= VULNS ========================= */
     let formattedVulns = [];
 
     try {
@@ -119,7 +113,7 @@ export const analyzeRepo = async (req, res) => {
       formattedVulns = vulns.map(v => ({
         repoId: repoIdStr,
         versionGroup: newVersion,
-        package: v.package,
+        package: v.package.toLowerCase(),
         version: String(v.version || ""),
         severity: v.severity,
         cve: v.cve,
@@ -127,12 +121,12 @@ export const analyzeRepo = async (req, res) => {
         description: v.description || ""
       }));
 
-      await Vulnerability.insertMany(formattedVulns, { ordered: false }).catch(() => {});
-    } catch {
-      console.log("⚠️ Vulnerability check failed");
+      await Vulnerability.insertMany(formattedVulns, { ordered: false });
+    } catch (err) {
+      console.log("⚠️ Vuln error:", err.message);
     }
 
-    console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
+    console.log("🚨 Vulns:", formattedVulns.length);
 
     /* ========================= ALERTS ========================= */
     let alerts = [];
@@ -144,7 +138,7 @@ export const analyzeRepo = async (req, res) => {
         findFixedVulnerabilities([], formattedVulns)
       );
 
-      await Alert.insertMany(alerts).catch(() => {});
+      await Alert.insertMany(alerts);
     } catch {}
 
     /* ========================= AI ========================= */
@@ -171,8 +165,8 @@ export const analyzeRepo = async (req, res) => {
     const depEdges = tree
       .filter(d => d.parent)
       .map(d => ({
-        from: d.parent,
-        to: d.name
+        from: d.parent.toLowerCase(),
+        to: d.name.toLowerCase()
       }));
 
     await pushToTigerGraph(
@@ -191,7 +185,7 @@ export const analyzeRepo = async (req, res) => {
       riskScore: risk,
       dependencyCount: uniqueDeps.length,
       vulnerabilityCount: formattedVulns.length
-    }).catch(() => {});
+    });
 
     /* ========================= UPDATE ========================= */
     const updatedRepo = await Repo.findByIdAndUpdate(

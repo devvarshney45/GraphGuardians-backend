@@ -45,7 +45,7 @@ export const analyzeRepo = async (req, res) => {
 
     await Repo.findByIdAndUpdate(repoId, { status: "scanning" });
 
-    const newVersion = (repo.scanCount || 0) + 1;
+    const newVersion = Number(repo.scanCount || 0) + 1;
 
     console.log(`🚀 SCAN START: ${repo.name}`);
 
@@ -79,10 +79,7 @@ export const analyzeRepo = async (req, res) => {
 
       emitResult(req, repoIdStr, updatedRepo, 0, 0, 0, []);
 
-      return response.json({
-        success: true,
-        repo: updatedRepo
-      });
+      return response.json({ success: true, repo: updatedRepo });
     }
 
     /* ========================= TREE ========================= */
@@ -97,7 +94,7 @@ export const analyzeRepo = async (req, res) => {
         const deps = pkg.dependencies || {};
 
         tree = Object.entries(deps).map(([name, version]) => ({
-          name,
+          name: name.toLowerCase(),
           version: version || "latest",
           parent: null
         }));
@@ -106,29 +103,28 @@ export const analyzeRepo = async (req, res) => {
       console.log("⚠️ Tree build failed");
     }
 
-    console.log("🌳 TREE SAMPLE:", tree[0]);
+    console.log(`🌳 TREE SIZE: ${tree.length}`);
 
     /* ========================= UNIQUE DEPS ========================= */
     const seen = new Set();
 
     const uniqueDeps = tree
       .filter(d => {
-        const key = `${d.name}@${d.version}`;
+        const key = `${d.name.toLowerCase()}@${d.version}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
       })
       .map(d => ({
-        repoId: repoIdStr,
+        repoId: repoIdStr, // 🔥 FIXED (STRING CONSISTENT)
         versionGroup: newVersion,
         name: d.name.toLowerCase(),
         version: String(d.version || "unknown"),
-        parent: d.parent ? d.parent.toLowerCase() : null, // 🔥 FIX
-        type: "prod"
+        parent: d.parent ? d.parent.toLowerCase() : null,
+        type: d.parent ? "TRANSITIVE" : "DIRECT" // 🔥 FIX
       }));
 
     console.log(`📦 Dependencies Saved: ${uniqueDeps.length}`);
-    console.log("📦 SAMPLE DEP:", uniqueDeps[0]);
 
     await Dependency.insertMany(uniqueDeps, { ordered: false }).catch(() => {});
 
@@ -170,40 +166,15 @@ export const analyzeRepo = async (req, res) => {
     } catch {}
 
     /* ========================= AI ========================= */
-    let aiInsights = {};
+    let aiInsights = [];
 
     try {
-      console.log("🧠 AI START");
-
-      const limited = formattedVulns.slice(0, 50);
-
-      const payload = {
-        totalDependencies: uniqueDeps.length,
-        totalVulnerabilities: formattedVulns.length,
-        severity: {
-          critical: formattedVulns.filter(v => v.severity === "CRITICAL").length,
-          high: formattedVulns.filter(v => v.severity === "HIGH").length,
-          medium: formattedVulns.filter(v => v.severity === "MEDIUM").length,
-          low: formattedVulns.filter(v => v.severity === "LOW").length
-        },
-        data: limited.map(v => `${v.package} (${v.severity})`).join("\n")
-      };
-
-      aiInsights = await generateAIInsights(payload);
-
-      console.log("✅ AI DONE");
-
-    } catch (err) {
-      console.log("⚠️ AI FAILED:", err.message);
-
-      aiInsights = {
-        summary: "AI unavailable",
-        risks: [],
-        fixes: []
-      };
+      aiInsights = await generateAIInsights(formattedVulns.slice(0, 20));
+    } catch {
+      aiInsights = [];
     }
 
-    /* ========================= PUSH NOTIFICATION ========================= */
+    /* ========================= PUSH ========================= */
     try {
       const user = await User.findById(repo.userId);
 
@@ -214,9 +185,7 @@ export const analyzeRepo = async (req, res) => {
           `${alerts.length} new vulnerabilities detected`
         );
       }
-    } catch (err) {
-      console.log("❌ Push failed:", err.message);
-    }
+    } catch {}
 
     /* ========================= TIGERGRAPH ========================= */
     const depEdges = tree
@@ -229,16 +198,9 @@ export const analyzeRepo = async (req, res) => {
     await pushToTigerGraph(
       repoIdStr,
       uniqueDeps.map(d => ({ name: d.name, version: d.version })),
-      formattedVulns.map(v => ({
-        package: v.package,
-        cve: v.cve,
-        severity: v.severity,
-        description: v.description
-      })),
+      formattedVulns,
       depEdges
-    ).catch(() => {
-      console.log("⚠️ TigerGraph failed");
-    });
+    ).catch(() => console.log("⚠️ TigerGraph failed"));
 
     /* ========================= RISK ========================= */
     const risk = calculateRisk(formattedVulns);

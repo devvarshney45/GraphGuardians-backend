@@ -3,11 +3,10 @@ import Alert from "../models/alert.model.js";
 import Repo from "../models/repo.model.js";
 
 /* =========================
-   📄 GET ALERTS (FIXED + ROBUST)
+   📄 GET ALERTS (FINAL FIX)
 ========================= */
 export const getAlerts = async (req, res) => {
   try {
-    // ✅ FIX: support both repoId & repo
     const repoId = req.query.repoId || req.query.repo;
 
     const page = Number(req.query.page) || 1;
@@ -17,14 +16,16 @@ export const getAlerts = async (req, res) => {
       return res.status(400).json({ msg: "Invalid repoId" });
     }
 
+    const repoObjectId = new mongoose.Types.ObjectId(repoId);
+
     // 🔐 ownership check
-    const repo = await Repo.findById(repoId);
+    const repo = await Repo.findById(repoObjectId);
 
     if (!repo || repo.userId.toString() !== req.user.id) {
       return res.status(403).json({ msg: "Unauthorized" });
     }
 
-    const filter = { repoId: repoId.toString() };
+    const filter = { repoId: repoObjectId }; // ✅ FIXED
 
     const skip = (page - 1) * limit;
 
@@ -74,7 +75,6 @@ export const markAsRead = async (req, res) => {
       return res.status(404).json({ msg: "Alert not found" });
     }
 
-    // 🔐 ownership check
     const repo = await Repo.findById(alert.repoId);
 
     if (!repo || repo.userId.toString() !== req.user.id) {
@@ -108,14 +108,16 @@ export const markAllAsRead = async (req, res) => {
       return res.status(400).json({ msg: "Invalid repoId" });
     }
 
-    const repo = await Repo.findById(repoId);
+    const repoObjectId = new mongoose.Types.ObjectId(repoId);
+
+    const repo = await Repo.findById(repoObjectId);
 
     if (!repo || repo.userId.toString() !== req.user.id) {
       return res.status(403).json({ msg: "Unauthorized" });
     }
 
     await Alert.updateMany(
-      { repoId: repoId.toString(), isRead: false },
+      { repoId: repoObjectId, isRead: false }, // ✅ FIXED
       { isRead: true }
     );
 
@@ -142,13 +144,15 @@ export const clearAlerts = async (req, res) => {
       return res.status(400).json({ msg: "Invalid repoId" });
     }
 
-    const repo = await Repo.findById(repoId);
+    const repoObjectId = new mongoose.Types.ObjectId(repoId);
+
+    const repo = await Repo.findById(repoObjectId);
 
     if (!repo || repo.userId.toString() !== req.user.id) {
       return res.status(403).json({ msg: "Unauthorized" });
     }
 
-    await Alert.deleteMany({ repoId: repoId.toString() });
+    await Alert.deleteMany({ repoId: repoObjectId }); // ✅ FIXED
 
     res.json({
       msg: "All alerts cleared"

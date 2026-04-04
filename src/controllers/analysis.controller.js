@@ -20,7 +20,16 @@ findNewVulnerabilities,
 findFixedVulnerabilities,
 generateAlerts
 } from "../utils/diff.util.js";
+const normalizeSeverity = (sev) => {
+  if (!sev) return "LOW";
 
+  const s = sev.toUpperCase();
+
+  if (s === "MODERATE") return "MEDIUM"; // 🔥 MAIN FIX
+  if (["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(s)) return s;
+
+  return "LOW";
+};
 export const analyzeRepo = async (req, res) => {
   const TIMEOUT = 25000;
 
@@ -141,15 +150,18 @@ export const analyzeRepo = async (req, res) => {
       const vulns = await checkVulnerabilities(uniqueDeps);
 
       formattedVulns = vulns.map(v => ({
-        repoId: repoIdStr,
-        versionGroup: newVersion,
-        package: v.package.toLowerCase(),
-        version: String(v.version || ""),
-        severity: v.severity,
-        cve: v.cve,
-        fix: v.fix,
-        description: v.description || ""
-      }));
+  repoId: repoIdStr,
+  versionGroup: newVersion,
+  package: v.package?.toLowerCase(),
+  version: String(v.version || ""),
+
+  // 🔥 FIXED LINE
+  severity: normalizeSeverity(v.severity),
+
+  cve: v.cve,
+  fix: v.fix,
+  description: v.description || ""
+}));
 
       await Vulnerability.insertMany(formattedVulns, { ordered: false }).catch(() => {});
     } catch {
@@ -162,12 +174,13 @@ export const analyzeRepo = async (req, res) => {
     /* ========================= ALERTS ========================= */
 /* ========================= ALERTS (FIXED 🔥) ========================= */
 /* ========================= ALERTS ========================= */
+/* ========================= ALERTS (FINAL FIXED 🔥) ========================= */
 let alerts = [];
 
 try {
   const repoObjectId = repo._id;
 
-  // 🔥 CLEAN DATA
+  // 🔥 CLEAN VALID VULNS
   const safeVulns = formattedVulns.filter(
     v => v.package && v.severity
   );
@@ -178,9 +191,13 @@ try {
   let fixedVulns = [];
 
   if (newVersion === 1) {
+    // 🟢 FIRST SCAN → ALL ALERTS
     console.log("🟢 FIRST SCAN → ALL ALERTS");
+
     newVulns = safeVulns;
+
   } else {
+    // 🔵 DIFF BASED ALERTS
     const previousVulns = await Vulnerability.find({
       repoId: repoIdStr,
       versionGroup: newVersion - 1
@@ -193,16 +210,24 @@ try {
     console.log("✅ FIXED:", fixedVulns.length);
   }
 
+  // 🔥 GENERATE ALERTS
   alerts = generateAlerts(repoObjectId, newVulns, fixedVulns);
 
-  if (alerts.length > 0) {
-    console.log("🚨 INSERTING ALERTS:", alerts.length);
+  // 🔥 FINAL SAFETY FILTER (IMPORTANT)
+  alerts = alerts.filter(a =>
+    a.package &&
+    ["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(a.severity)
+  );
 
+  console.log("📢 FINAL ALERTS:", alerts.length);
+
+  // 🔥 SAVE
+  if (alerts.length > 0) {
     const result = await Alert.insertMany(alerts);
 
-    console.log("✅ SAVED ALERTS:", result.length);
+    console.log("✅ ALERTS SAVED:", result.length);
   } else {
-    console.log("⚠️ NO ALERTS");
+    console.log("⚠️ NO ALERTS TO SAVE");
   }
 
 } catch (err) {

@@ -1,38 +1,41 @@
+import mongoose from "mongoose";
 import Alert from "../models/alert.model.js";
 import Repo from "../models/repo.model.js";
 
 /* =========================
-   📄 GET ALERTS
+   📄 GET ALERTS (FIXED + ROBUST)
 ========================= */
-
 export const getAlerts = async (req, res) => {
   try {
-    const { repoId, page = 1, limit = 20 } = req.query;
+    // ✅ FIX: support both repoId & repo
+    const repoId = req.query.repoId || req.query.repo;
 
-    const filter = {};
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 20;
 
-    // 🔐 repo ownership check
-    if (repoId) {
-      const repo = await Repo.findById(repoId);
-
-      if (!repo || repo.userId.toString() !== req.user.id) {
-        return res.status(403).json({ msg: "Unauthorized" });
-      }
-
-      filter.repoId = repoId;
+    if (!repoId || !mongoose.Types.ObjectId.isValid(repoId)) {
+      return res.status(400).json({ msg: "Invalid repoId" });
     }
+
+    // 🔐 ownership check
+    const repo = await Repo.findById(repoId);
+
+    if (!repo || repo.userId.toString() !== req.user.id) {
+      return res.status(403).json({ msg: "Unauthorized" });
+    }
+
+    const filter = { repoId: repoId.toString() };
 
     const skip = (page - 1) * limit;
 
     const alerts = await Alert.find(filter)
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(Number(limit))
+      .limit(limit)
       .lean();
 
     const total = await Alert.countDocuments(filter);
 
-    // 🔥 unread count (NEW)
     const unread = await Alert.countDocuments({
       ...filter,
       isRead: false
@@ -40,13 +43,14 @@ export const getAlerts = async (req, res) => {
 
     res.json({
       total,
-      unread, // 🔥 important for app badge
-      page: Number(page),
+      unread,
+      page,
       pages: Math.ceil(total / limit),
-      alerts
+      alerts: alerts || []
     });
 
   } catch (err) {
+    console.log("❌ GET ALERTS ERROR:", err.message);
     res.status(500).json({
       error: "Failed to fetch alerts"
     });
@@ -56,10 +60,13 @@ export const getAlerts = async (req, res) => {
 /* =========================
    🔔 MARK SINGLE ALERT AS READ
 ========================= */
-
 export const markAsRead = async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ msg: "Invalid alert ID" });
+    }
 
     const alert = await Alert.findById(id);
 
@@ -83,6 +90,7 @@ export const markAsRead = async (req, res) => {
     });
 
   } catch (err) {
+    console.log("❌ markAsRead error:", err.message);
     res.status(500).json({
       error: "Failed to update alert"
     });
@@ -92,13 +100,12 @@ export const markAsRead = async (req, res) => {
 /* =========================
    🔔 MARK ALL ALERTS AS READ
 ========================= */
-
 export const markAllAsRead = async (req, res) => {
   try {
-    const { repoId } = req.query;
+    const repoId = req.query.repoId || req.query.repo;
 
-    if (!repoId) {
-      return res.status(400).json({ msg: "repoId required" });
+    if (!repoId || !mongoose.Types.ObjectId.isValid(repoId)) {
+      return res.status(400).json({ msg: "Invalid repoId" });
     }
 
     const repo = await Repo.findById(repoId);
@@ -108,7 +115,7 @@ export const markAllAsRead = async (req, res) => {
     }
 
     await Alert.updateMany(
-      { repoId, isRead: false },
+      { repoId: repoId.toString(), isRead: false },
       { isRead: true }
     );
 
@@ -117,6 +124,7 @@ export const markAllAsRead = async (req, res) => {
     });
 
   } catch (err) {
+    console.log("❌ markAllAsRead error:", err.message);
     res.status(500).json({
       error: "Failed to update alerts"
     });
@@ -126,13 +134,12 @@ export const markAllAsRead = async (req, res) => {
 /* =========================
    🗑️ CLEAR ALERTS
 ========================= */
-
 export const clearAlerts = async (req, res) => {
   try {
-    const { repoId } = req.query;
+    const repoId = req.query.repoId || req.query.repo;
 
-    if (!repoId) {
-      return res.status(400).json({ msg: "repoId required" });
+    if (!repoId || !mongoose.Types.ObjectId.isValid(repoId)) {
+      return res.status(400).json({ msg: "Invalid repoId" });
     }
 
     const repo = await Repo.findById(repoId);
@@ -141,13 +148,14 @@ export const clearAlerts = async (req, res) => {
       return res.status(403).json({ msg: "Unauthorized" });
     }
 
-    await Alert.deleteMany({ repoId });
+    await Alert.deleteMany({ repoId: repoId.toString() });
 
     res.json({
       msg: "All alerts cleared"
     });
 
   } catch (err) {
+    console.log("❌ clearAlerts error:", err.message);
     res.status(500).json({
       error: "Failed to clear alerts"
     });

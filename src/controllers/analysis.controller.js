@@ -161,42 +161,45 @@ export const analyzeRepo = async (req, res) => {
     /* ========================= ALERTS ========================= */
     /* ========================= ALERTS ========================= */
 /* ========================= ALERTS (FIXED 🔥) ========================= */
+/* ========================= ALERTS ========================= */
 let alerts = [];
 
 try {
-  // ✅ previous scan ka data lao
-  const previousVulns = await Vulnerability.find({
-    repoId: repoIdStr,
-    versionGroup: newVersion - 1
-  }).lean();
+  let newVulns = [];
+  let fixedVulns = [];
 
-  console.log("📊 PREVIOUS:", previousVulns.length);
-  console.log("📊 CURRENT:", formattedVulns.length);
+  if (newVersion === 1) {
+    // 🔥 FIRST SCAN → ALL VULNERABILITIES ALERTS
+    console.log("🟢 FIRST SCAN → ALL ALERTS");
 
-  // ✅ diff nikalo
-  const newVulns = findNewVulnerabilities(previousVulns, formattedVulns);
-  const fixedVulns = findFixedVulnerabilities(previousVulns, formattedVulns);
+    newVulns = formattedVulns; // 🔥 ALL
 
-  console.log("🆕 NEW:", newVulns.length);
-  console.log("✅ FIXED:", fixedVulns.length);
+  } else {
+    // 🔥 NEXT SCANS → DIFF BASED
+    const previousVulns = await Vulnerability.find({
+      repoId: repoIdStr,
+      versionGroup: newVersion - 1
+    }).lean();
 
-  // ✅ alerts generate
+    newVulns = findNewVulnerabilities(previousVulns, formattedVulns);
+    fixedVulns = findFixedVulnerabilities(previousVulns, formattedVulns);
+
+    console.log("🆕 NEW:", newVulns.length);
+    console.log("✅ FIXED:", fixedVulns.length);
+  }
+
+  // 🔥 GENERATE ALERTS
   alerts = generateAlerts(repoIdStr, newVulns, fixedVulns);
 
-  // ✅ save only if exist
+  // 🔥 SAVE
   if (alerts.length > 0) {
-    console.log("🚨 SAVING ALERTS:", alerts.length);
+    console.log("🚨 INSERTING ALERTS:", alerts.length);
 
-    await Alert.insertMany(
-      alerts.map(a => ({
-        ...a,
-        repoId: repoIdStr,
-        isRead: false,
-        createdAt: new Date()
-      }))
-    );
+    await Alert.insertMany(alerts);
+
+    console.log("✅ ALERTS SAVED");
   } else {
-    console.log("⚠️ NO ALERTS GENERATED");
+    console.log("⚠️ NO ALERTS");
   }
 
 } catch (err) {

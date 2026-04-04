@@ -159,17 +159,44 @@ export const analyzeRepo = async (req, res) => {
     console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
 
     /* ========================= ALERTS ========================= */
-    let alerts = [];
+    /* ========================= ALERTS ========================= */
+let alerts = [];
 
-    try {
-      alerts = generateAlerts(
-        repoIdStr,
-        findNewVulnerabilities([], formattedVulns),
-        findFixedVulnerabilities([], formattedVulns)
-      );
+try {
+  const previousVulns = await Vulnerability.find({
+    repoId: repoIdStr,
+    versionGroup: newVersion - 1
+  }).lean();
 
-      await Alert.insertMany(alerts).catch(() => {});
-    } catch {}
+  console.log("📊 PREVIOUS VULNS:", previousVulns.length);
+  console.log("📊 CURRENT VULNS:", formattedVulns.length);
+
+  const newVulns = findNewVulnerabilities(previousVulns, formattedVulns);
+  const fixedVulns = findFixedVulnerabilities(previousVulns, formattedVulns);
+
+  console.log("🆕 NEW VULNS:", newVulns.length);
+  console.log("✅ FIXED VULNS:", fixedVulns.length);
+
+  alerts = generateAlerts(repoIdStr, newVulns, fixedVulns);
+
+  if (alerts.length > 0) {
+    console.log("🚨 ALERTS SAVING:", alerts.length);
+
+    await Alert.insertMany(
+      alerts.map(a => ({
+        ...a,
+        repoId: repoIdStr,
+        isRead: false,
+        createdAt: new Date()
+      }))
+    );
+  } else {
+    console.log("⚠️ NO ALERTS GENERATED");
+  }
+
+} catch (err) {
+  console.log("❌ ALERT ERROR:", err.message);
+}
 
     /* ========================= AI ========================= */
     let aiInsights = [];

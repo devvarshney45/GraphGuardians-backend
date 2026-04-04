@@ -160,27 +160,32 @@ export const analyzeRepo = async (req, res) => {
 
     /* ========================= ALERTS ========================= */
     /* ========================= ALERTS ========================= */
+/* ========================= ALERTS (FIXED 🔥) ========================= */
 let alerts = [];
 
 try {
+  // ✅ previous scan ka data lao
   const previousVulns = await Vulnerability.find({
     repoId: repoIdStr,
     versionGroup: newVersion - 1
   }).lean();
 
-  console.log("📊 PREVIOUS VULNS:", previousVulns.length);
-  console.log("📊 CURRENT VULNS:", formattedVulns.length);
+  console.log("📊 PREVIOUS:", previousVulns.length);
+  console.log("📊 CURRENT:", formattedVulns.length);
 
+  // ✅ diff nikalo
   const newVulns = findNewVulnerabilities(previousVulns, formattedVulns);
   const fixedVulns = findFixedVulnerabilities(previousVulns, formattedVulns);
 
-  console.log("🆕 NEW VULNS:", newVulns.length);
-  console.log("✅ FIXED VULNS:", fixedVulns.length);
+  console.log("🆕 NEW:", newVulns.length);
+  console.log("✅ FIXED:", fixedVulns.length);
 
+  // ✅ alerts generate
   alerts = generateAlerts(repoIdStr, newVulns, fixedVulns);
 
+  // ✅ save only if exist
   if (alerts.length > 0) {
-    console.log("🚨 ALERTS SAVING:", alerts.length);
+    console.log("🚨 SAVING ALERTS:", alerts.length);
 
     await Alert.insertMany(
       alerts.map(a => ({
@@ -197,7 +202,6 @@ try {
 } catch (err) {
   console.log("❌ ALERT ERROR:", err.message);
 }
-
     /* ========================= AI ========================= */
     let aiInsights = [];
 

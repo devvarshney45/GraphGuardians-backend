@@ -1,43 +1,80 @@
 import mongoose from "mongoose";
 
-const alertSchema = new mongoose.Schema({
-  repoId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "Repo",
-    required: true
-  },
+const alertSchema = new mongoose.Schema(
+  {
+    /* =========================
+       🔗 REPO REFERENCE
+    ========================= */
+    repoId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Repo",
+      required: true,
+      index: true // 🔥 performance boost
+    },
 
-  message: {
-    type: String,
-    required: true
-  },
+    /* =========================
+       📝 ALERT MESSAGE
+    ========================= */
+    message: {
+      type: String,
+      required: true,
+      trim: true
+    },
 
-  type: {
-    type: String,
-    enum: ["NEW_VULNERABILITY", "UPDATED", "FIXED"],
-    default: "NEW_VULNERABILITY"
-  },
+    /* =========================
+       🏷️ TYPE
+    ========================= */
+    type: {
+      type: String,
+      enum: ["NEW_VULNERABILITY", "UPDATED", "FIXED"],
+      default: "NEW_VULNERABILITY",
+      index: true
+    },
 
-  severity: {
-    type: String,
-    enum: ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
-    default: "HIGH"
-  },
+    /* =========================
+       ⚠️ SEVERITY
+    ========================= */
+    severity: {
+      type: String,
+      enum: ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+      default: "HIGH",
+      index: true
+    },
 
-  package: {
-    type: String // kis dependency se related
-  },
+    /* =========================
+       📦 PACKAGE NAME
+    ========================= */
+    package: {
+      type: String,
+      trim: true,
+      index: true
+    },
 
-  isRead: {
-    type: Boolean,
-    default: false
-  },
+    /* =========================
+       👁️ READ STATUS
+    ========================= */
+    isRead: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
 
-  createdAt: {
-    type: Date,
-    default: Date.now
+    /* =========================
+       🧠 EXTRA METADATA (FUTURE USE)
+    ========================= */
+    meta: {
+      type: Object,
+      default: {}
+    }
+  },
+  {
+    timestamps: true // 🔥 createdAt + updatedAt auto
   }
+);
 
-}, { timestamps: true });
+/* =========================
+   ⚡ COMPOUND INDEX (FAST QUERY)
+========================= */
+alertSchema.index({ repoId: 1, createdAt: -1 });
 
 export default mongoose.model("Alert", alertSchema);

@@ -1,7 +1,3 @@
-/* =========================================
-   🔍 COMPARE DEPENDENCIES
-========================================= */
-
 export const compareDependencies = (oldDeps = [], newDeps = []) => {
   const oldMap = new Map(oldDeps.map(d => [d.name, d.cleanVersion]));
   const newMap = new Map(newDeps.map(d => [d.name, d.cleanVersion]));
@@ -10,7 +6,6 @@ export const compareDependencies = (oldDeps = [], newDeps = []) => {
   const removed = [];
   const updated = [];
 
-  // ➕ added / 🔁 updated
   newMap.forEach((version, name) => {
     if (!oldMap.has(name)) {
       added.push({ name, version });
@@ -23,7 +18,6 @@ export const compareDependencies = (oldDeps = [], newDeps = []) => {
     }
   });
 
-  // ❌ removed
   oldMap.forEach((version, name) => {
     if (!newMap.has(name)) {
       removed.push({ name, version });
@@ -33,66 +27,38 @@ export const compareDependencies = (oldDeps = [], newDeps = []) => {
   return { added, removed, updated };
 };
 
-/* =========================================
-   🚨 DETECT NEW VULNERABILITIES
-========================================= */
-
 export const findNewVulnerabilities = (oldVulns = [], newVulns = []) => {
   const oldSet = new Set(oldVulns.map(v => v.package + v.severity));
 
-  const newIssues = [];
-
-  newVulns.forEach(v => {
-    const key = v.package + v.severity;
-
-    if (!oldSet.has(key)) {
-      newIssues.push(v);
-    }
-  });
-
-  return newIssues;
+  return newVulns.filter(v => !oldSet.has(v.package + v.severity));
 };
-
-/* =========================================
-   ✅ FIXED VULNERABILITIES
-========================================= */
 
 export const findFixedVulnerabilities = (oldVulns = [], newVulns = []) => {
   const newSet = new Set(newVulns.map(v => v.package + v.severity));
 
-  const fixed = [];
-
-  oldVulns.forEach(v => {
-    const key = v.package + v.severity;
-
-    if (!newSet.has(key)) {
-      fixed.push(v);
-    }
-  });
-
-  return fixed;
+  return oldVulns.filter(v => !newSet.has(v.package + v.severity));
 };
 
-/* =========================================
-   🔥 GENERATE ALERTS (IMPORTANT)
-========================================= */
-
-export const generateAlerts = (repoId, newVulns, fixedVulns) => {
+export const generateAlerts = (repoId, newVulns = [], fixedVulns = []) => {
   const alerts = [];
 
   newVulns.forEach(v => {
     alerts.push({
       repoId,
-      message: `🚨 New vulnerability detected in ${v.package} (${v.severity})`,
-      severity: v.severity
+      type: "NEW_VULNERABILITY",
+      message: `New vulnerability detected in ${v.package} (${v.severity})`,
+      severity: v.severity,      // ✅ CRITICAL/HIGH/MEDIUM/LOW
+      package: v.package
     });
   });
 
   fixedVulns.forEach(v => {
     alerts.push({
       repoId,
-      message: `✅ Vulnerability fixed in ${v.package}`,
-      severity: "INFO"
+      type: "FIXED",
+      message: `Vulnerability fixed in ${v.package}`,
+      severity: "LOW",           // ✅ FIXED: "INFO" → "LOW" (model enum match)
+      package: v.package
     });
   });
 

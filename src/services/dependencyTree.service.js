@@ -1,5 +1,5 @@
 import axios from "axios";
-import { Buffer } from "buffer"; // 🔥 FIX 1
+import { Buffer } from "buffer";
 
 /* =========================
 🔧 HELPERS
@@ -37,7 +37,6 @@ const fetchFile = async (owner, repo, filePath, token) => {
       headers: getHeaders(token)
     });
 
-    // 🔥 FIX 2: safe content check
     if (!res.data?.content) {
       console.log(`⚠️ No content in ${filePath}`);
       return null;
@@ -54,44 +53,73 @@ const fetchFile = async (owner, repo, filePath, token) => {
 };
 
 /* =========================
-🌳 TREE BUILDER
+🌳 TREE BUILDER (FIXED + DEBUG)
 ========================= */
 export const buildTreeFromLockfile = (lockfile) => {
   const tree = [];
   const visited = new Set();
 
-  const traverse = (deps, parent = null, path = []) => {
+  const source = lockfile?.packages || lockfile?.dependencies;
+
+  if (!source) {
+    console.log("❌ No dependencies/packages found in lockfile");
+    return tree;
+  }
+
+  console.log("📦 LOCKFILE KEYS SAMPLE:", Object.keys(source).slice(0, 5));
+
+  const traverse = (deps, parent = null, depth = 0) => {
     if (!deps) return;
 
     for (const [name, data] of Object.entries(deps)) {
+      const cleanName = name.replace(/^node_modules\//, "").toLowerCase();
+      if (!cleanName) continue;
+
       const version = data.version || "unknown";
-
-      const currentPath = [...path, name];
-
-      const key = `${name.toLowerCase()}@${version}_${parent || "root"}`;
+      const key = `${cleanName}@${version}_${parent || "root"}`;
 
       if (visited.has(key)) continue;
       visited.add(key);
 
-      tree.push({
-        name: name.toLowerCase(),
+      const node = {
+        name: cleanName,
         version,
         parent: parent ? parent.toLowerCase() : null,
-        path: currentPath.join("->"),
-        depth: currentPath.length
-      });
+        depth: depth + 1
+      };
+
+      tree.push(node);
+
+      // 🔥 DEBUG TREE NODE
+      if (depth < 2) {
+        console.log("🌿 NODE:", node);
+      }
 
       const childDeps = data.dependencies || data.requires;
 
       if (childDeps && typeof childDeps === "object") {
-        traverse(childDeps, name, currentPath);
+        traverse(childDeps, cleanName, depth + 1);
       }
     }
   };
 
-  if (lockfile?.dependencies) {
-    traverse(lockfile.dependencies);
-  }
+  traverse(source);
+
+  console.log("🌳 TREE SIZE:", tree.length);
+
+  // 🔥 DEBUG SAMPLE
+  console.log("🌳 TREE SAMPLE:", tree.slice(0, 10));
+
+  // 🔥 BUILD EDGES FOR DEBUG
+  const depEdges = tree
+    .filter(d => d.parent)
+    .map(d => ({
+      from: d.parent,
+      to: d.name
+    }));
+
+  console.log("🔗 DEP EDGES SAMPLE:", depEdges.slice(0, 10));
+  console.log("🔗 TOTAL EDGES:", depEdges.length);
 
   return tree;
 };
@@ -100,19 +128,24 @@ export const buildTreeFromLockfile = (lockfile) => {
 🌐 FALLBACK
 ========================= */
 export const buildFallbackTree = (pkg) => {
+  console.log("⚠️ USING FALLBACK TREE");
+
   const deps = {
     ...(pkg?.dependencies || {}),
     ...(pkg?.devDependencies || {}),
     ...(pkg?.peerDependencies || {})
   };
 
-  return Object.entries(deps).map(([name, version]) => ({
+  const fallback = Object.entries(deps).map(([name, version]) => ({
     name: name.toLowerCase(),
     version: version || "latest",
     parent: null,
-    path: name,
     depth: 1
   }));
+
+  console.log("🌳 FALLBACK TREE:", fallback.slice(0, 10));
+
+  return fallback;
 };
 
 /* =========================
@@ -141,22 +174,22 @@ export const getDependencyTree = async (repoUrl, token = null) => {
 
     let tree = [];
 
-    if (lockfile?.dependencies) {
+    if (lockfile?.packages || lockfile?.dependencies) {
       console.log("✅ LOCKFILE MODE");
 
       tree = buildTreeFromLockfile(lockfile);
 
       if (!tree.length) {
-        console.log("⚠️ Empty lockfile → fallback");
+        console.log("⚠️ EMPTY TREE → FALLBACK");
         tree = buildFallbackTree(pkg);
       }
 
     } else {
-      console.log("⚠️ FALLBACK MODE");
+      console.log("⚠️ NO LOCKFILE → FALLBACK");
       tree = buildFallbackTree(pkg);
     }
 
-    console.log(`🌳 Final Tree Size: ${tree.length}`);
+    console.log(`🌳 FINAL TREE SIZE: ${tree.length}`);
 
     return tree;
 

@@ -13,8 +13,7 @@ import { generateAIInsights } from "./ai.service.js";
 import { getDependencyTree } from "./dependencyTree.service.js";
 import { extractDependencyEdges } from "../utils/treeParser.util.js";
 
-import { pushToNeo4j } from "./neo4j.service.js";
-
+import { pushToTigerGraph } from "./tigergraph.service.js";
 import {
   compareDependencies,
   findNewVulnerabilities,
@@ -177,12 +176,26 @@ export const runAnalysis = async (url, repoId, token) => {
     /* =========================
        🧠 NEO4J GRAPH PUSH
     ========================= */
-    try {
-      await pushToNeo4j(repoId, uniqueDeps, formattedVulns, depEdges);
-      console.log("🧠 Neo4j Sync Done ✅");
-    } catch (err) {
-      console.log("⚠️ Neo4j error:", err.message);
-    }
+    // REMOVE:
+try {
+  await pushToNeo4j(repoId, uniqueDeps, formattedVulns, depEdges);
+  console.log("🧠 Neo4j Sync Done ✅");
+} catch (err) {
+  console.log("⚠️ Neo4j error:", err.message);
+}
+
+// ADD:
+try {
+  await pushToTigerGraph(
+    repoId,
+    uniqueDeps.map(d => ({ name: d.name, version: d.version })),
+    formattedVulns,
+    depEdges
+  );
+  console.log("🧠 TigerGraph Sync Done ✅");
+} catch (err) {
+  console.log("⚠️ TigerGraph error:", err.message);
+}
 
     /* =========================
        📊 SCAN HISTORY

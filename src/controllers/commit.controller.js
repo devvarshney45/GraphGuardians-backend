@@ -1,15 +1,28 @@
 import Commit from "../models/commit.model.js";
 import Repo from "../models/repo.model.js";
-import { runAnalysis } from "../services/analysis.service.js";
 
-// 📥 GET COMMITS
+// ✅ REMOVED: githubWebhook — webhook.controller.js mein already better version hai
+// ✅ REMOVED: analyzeRepo import — yahan zarurat nahi
+
 export const getCommits = async (req, res) => {
   try {
     const { repoId } = req.params;
 
+    // 🔐 Ownership check
+    const repo = await Repo.findById(repoId);
+
+    if (!repo) {
+      return res.status(404).json({ msg: "Repo not found" });
+    }
+
+    if (repo.userId.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ msg: "Unauthorized" });
+    }
+
     const commits = await Commit.find({ repoId })
       .sort({ createdAt: -1 })
-      .limit(50);
+      .limit(50)
+      .lean();
 
     res.json({
       count: commits.length,
@@ -17,42 +30,7 @@ export const getCommits = async (req, res) => {
     });
 
   } catch (err) {
+    console.log("❌ Get commits error:", err.message);
     res.status(500).json({ error: err.message });
-  }
-};
-
-// 🔁 WEBHOOK (REAL-TIME 🔥)
-export const githubWebhook = async (req, res) => {
-  try {
-    const { repository } = req.body;
-
-    if (!repository) return res.sendStatus(400);
-
-    const repoName = repository.full_name;
-
-    const repo = await Repo.findOne({ name: repoName });
-
-    if (!repo) return res.sendStatus(200);
-
-    console.log("🔥 New commit detected");
-
-    // 🔥 AUTO ANALYZE
-    await analyzeRepo(
-      {
-        body: {
-          url: repo.url,
-          repoId: repo._id,
-          token: repo.githubToken // optional
-        },
-        user: { id: repo.userId }
-      },
-      { json: () => {} }
-    );
-
-    res.sendStatus(200);
-
-  } catch (err) {
-    console.log("Webhook error:", err.message);
-    res.sendStatus(500);
   }
 };

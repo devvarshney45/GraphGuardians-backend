@@ -165,48 +165,42 @@ export const analyzeRepo = async (req, res) => {
 let alerts = [];
 
 try {
+  const repoObjectId = repo._id;
+
+  // 🔥 CLEAN DATA
+  const safeVulns = formattedVulns.filter(
+    v => v.package && v.severity
+  );
+
+  console.log("🧹 CLEAN VULNS:", safeVulns.length);
+
   let newVulns = [];
   let fixedVulns = [];
 
-  // 🔥 IMPORTANT: always use ObjectId
-  const repoObjectId = repo._id;
-
   if (newVersion === 1) {
-    // 🟢 FIRST SCAN → ALL VULNERABILITIES
     console.log("🟢 FIRST SCAN → ALL ALERTS");
-
-    newVulns = formattedVulns;
-
+    newVulns = safeVulns;
   } else {
-    // 🔵 NEXT SCANS → DIFF BASED
     const previousVulns = await Vulnerability.find({
-      repoId: repoIdStr, // 🔥 vulnerabilities me string hi hai
+      repoId: repoIdStr,
       versionGroup: newVersion - 1
     }).lean();
 
-    newVulns = findNewVulnerabilities(previousVulns, formattedVulns);
-    fixedVulns = findFixedVulnerabilities(previousVulns, formattedVulns);
+    newVulns = findNewVulnerabilities(previousVulns, safeVulns);
+    fixedVulns = findFixedVulnerabilities(previousVulns, safeVulns);
 
     console.log("🆕 NEW:", newVulns.length);
     console.log("✅ FIXED:", fixedVulns.length);
   }
 
-  // 🔥 GENERATE ALERTS (ObjectId pass karo)
   alerts = generateAlerts(repoObjectId, newVulns, fixedVulns);
 
-  // 🔥 SAFETY: ensure repoId ObjectId hi ho
-  alerts = alerts.map(a => ({
-    ...a,
-    repoId: repoObjectId
-  }));
-
-  // 🔥 SAVE ALERTS
   if (alerts.length > 0) {
     console.log("🚨 INSERTING ALERTS:", alerts.length);
 
-    await Alert.insertMany(alerts);
+    const result = await Alert.insertMany(alerts);
 
-    console.log("✅ ALERTS SAVED");
+    console.log("✅ SAVED ALERTS:", result.length);
   } else {
     console.log("⚠️ NO ALERTS");
   }
@@ -214,20 +208,6 @@ try {
 } catch (err) {
   console.log("❌ ALERT ERROR:", err.message);
 }
-    /* ========================= AI ========================= */
-    let aiInsights = [];
-
-    try {
-      console.log("🧠 AI START");
-
-      aiInsights = await generateAIInsights(formattedVulns.slice(0, 50));
-
-      console.log("✅ AI DONE");
-    } catch (err) {
-      console.log("⚠️ AI FAILED:", err.message);
-      aiInsights = [];
-    }
-
     /* ========================= PUSH NOTIFICATION ========================= */
     try {
       const user = await User.findById(repo.userId);

@@ -168,16 +168,19 @@ try {
   let newVulns = [];
   let fixedVulns = [];
 
+  // 🔥 IMPORTANT: always use ObjectId
+  const repoObjectId = repo._id;
+
   if (newVersion === 1) {
-    // 🔥 FIRST SCAN → ALL VULNERABILITIES ALERTS
+    // 🟢 FIRST SCAN → ALL VULNERABILITIES
     console.log("🟢 FIRST SCAN → ALL ALERTS");
 
-    newVulns = formattedVulns; // 🔥 ALL
+    newVulns = formattedVulns;
 
   } else {
-    // 🔥 NEXT SCANS → DIFF BASED
+    // 🔵 NEXT SCANS → DIFF BASED
     const previousVulns = await Vulnerability.find({
-      repoId: repoIdStr,
+      repoId: repoIdStr, // 🔥 vulnerabilities me string hi hai
       versionGroup: newVersion - 1
     }).lean();
 
@@ -188,10 +191,16 @@ try {
     console.log("✅ FIXED:", fixedVulns.length);
   }
 
-  // 🔥 GENERATE ALERTS
-  alerts = generateAlerts(repoIdStr, newVulns, fixedVulns);
+  // 🔥 GENERATE ALERTS (ObjectId pass karo)
+  alerts = generateAlerts(repoObjectId, newVulns, fixedVulns);
 
-  // 🔥 SAVE
+  // 🔥 SAFETY: ensure repoId ObjectId hi ho
+  alerts = alerts.map(a => ({
+    ...a,
+    repoId: repoObjectId
+  }));
+
+  // 🔥 SAVE ALERTS
   if (alerts.length > 0) {
     console.log("🚨 INSERTING ALERTS:", alerts.length);
 

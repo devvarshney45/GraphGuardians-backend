@@ -1,6 +1,9 @@
+/* =========================
+   🔍 COMPARE DEPENDENCIES
+========================= */
 export const compareDependencies = (oldDeps = [], newDeps = []) => {
-  const oldMap = new Map(oldDeps.map(d => [d.name, d.cleanVersion]));
-  const newMap = new Map(newDeps.map(d => [d.name, d.cleanVersion]));
+  const oldMap = new Map(oldDeps.map(d => [d.name, d.version]));
+  const newMap = new Map(newDeps.map(d => [d.name, d.version]));
 
   const added = [];
   const removed = [];
@@ -27,18 +30,35 @@ export const compareDependencies = (oldDeps = [], newDeps = []) => {
   return { added, removed, updated };
 };
 
+/* =========================
+   🆕 NEW VULNERABILITIES (FIXED 🔥)
+========================= */
 export const findNewVulnerabilities = (oldVulns = [], newVulns = []) => {
-  const oldSet = new Set(oldVulns.map(v => v.package + v.severity));
+  const oldSet = new Set(
+    oldVulns.map(v => `${v.package}-${v.cve || "no-cve"}-${v.version}`)
+  );
 
-  return newVulns.filter(v => !oldSet.has(v.package + v.severity));
+  return newVulns.filter(
+    v => !oldSet.has(`${v.package}-${v.cve || "no-cve"}-${v.version}`)
+  );
 };
 
+/* =========================
+   ✅ FIXED VULNERABILITIES (FIXED 🔥)
+========================= */
 export const findFixedVulnerabilities = (oldVulns = [], newVulns = []) => {
-  const newSet = new Set(newVulns.map(v => v.package + v.severity));
+  const newSet = new Set(
+    newVulns.map(v => `${v.package}-${v.cve || "no-cve"}-${v.version}`)
+  );
 
-  return oldVulns.filter(v => !newSet.has(v.package + v.severity));
+  return oldVulns.filter(
+    v => !newSet.has(`${v.package}-${v.cve || "no-cve"}-${v.version}`)
+  );
 };
 
+/* =========================
+   🚨 GENERATE ALERTS (ENHANCED 🔥)
+========================= */
 export const generateAlerts = (repoId, newVulns = [], fixedVulns = []) => {
   const alerts = [];
 
@@ -46,9 +66,10 @@ export const generateAlerts = (repoId, newVulns = [], fixedVulns = []) => {
     alerts.push({
       repoId,
       type: "NEW_VULNERABILITY",
-      message: `New vulnerability detected in ${v.package} (${v.severity})`,
-      severity: v.severity,      // ✅ CRITICAL/HIGH/MEDIUM/LOW
-      package: v.package
+      message: `🚨 ${v.package}@${v.version} has ${v.severity} vulnerability`,
+      severity: v.severity,
+      package: v.package,
+      cve: v.cve || null
     });
   });
 
@@ -56,9 +77,10 @@ export const generateAlerts = (repoId, newVulns = [], fixedVulns = []) => {
     alerts.push({
       repoId,
       type: "FIXED",
-      message: `Vulnerability fixed in ${v.package}`,
-      severity: "LOW",           // ✅ FIXED: "INFO" → "LOW" (model enum match)
-      package: v.package
+      message: `✅ ${v.package}@${v.version} vulnerability resolved`,
+      severity: "LOW",
+      package: v.package,
+      cve: v.cve || null
     });
   });
 

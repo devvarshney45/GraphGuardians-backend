@@ -5,10 +5,10 @@ import {
   getProfile,
   githubLogin,
   githubCallback,
+  githubInstallCallback,
   saveDeviceToken,
   getMe
 } from "../controllers/auth.controller.js";
-
 import { authMiddleware } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
@@ -19,13 +19,18 @@ router.post("/register", register);
 // 🔐 Login
 router.post("/login", login);
 
-// 🚀 GitHub OAuth Login
+// 🚀 GitHub OAuth — Step 1 (redirect to GitHub)
 router.get("/github", githubLogin);
 
-// 🔄 GitHub OAuth Callback
+// 🔄 GitHub OAuth — Step 2 (callback after login)
 router.get("/github/callback", githubCallback);
 
-// 📱 Save Device Token
+// ✅ GitHub App Install Callback
+// GitHub App settings mein redirect URL set karo:
+// https://yourdomain.com/api/auth/github/install/callback
+router.get("/github/install/callback", githubInstallCallback);
+
+// 📱 Save Device Token (FCM)
 router.post("/save-device-token", authMiddleware, saveDeviceToken);
 
 // 👤 Get current user
@@ -38,8 +43,5 @@ router.post("/logout", authMiddleware, (req, res) => {
     msg: "Logout successful. Remove token from client."
   });
 });
-
-// ✅ REMOVED: /github/install aur /github/install/callback
-// Yeh dono github.routes.js mein hain — duplicate tha
 
 export default router;

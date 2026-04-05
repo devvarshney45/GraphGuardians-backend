@@ -61,57 +61,82 @@ router.get("/install-url", authMiddleware, async (req, res) => {
 });
 
 /* ================================
-   🔥 INSTALL CALLBACK (SAFE LINKING)
+   🔥 INSTALL CALLBACK (FINAL FIX 🔥🔥)
 ================================ */
 router.get("/install/callback", async (req, res) => {
   try {
-    const { installation_id, state } = req.query;
+    const { installation_id, state, token } = req.query;
 
     console.log("\n📥 ===============================");
     console.log("📥 INSTALL CALLBACK HIT");
     console.log("Query:", req.query);
     console.log("==================================");
 
-    if (!installation_id || !state) {
-      return res.status(400).send("Missing installation_id or state");
+    if (!installation_id) {
+      return res.status(400).send("Missing installation_id");
     }
 
-    let decoded;
-    try {
-      decoded = jwt.verify(state, process.env.JWT_SECRET);
-    } catch (err) {
-      console.log("❌ Invalid state");
-      return res.status(401).send("Invalid state");
+    let user = null;
+
+    /* =========================
+       🔐 PRIORITY 1 → STATE (WEB FLOW)
+    ========================= */
+    if (state) {
+      try {
+        const decoded = jwt.verify(state, process.env.JWT_SECRET);
+        user = await User.findById(decoded.id);
+
+        console.log("✅ User from state:", user?._id);
+
+      } catch (err) {
+        console.log("❌ Invalid state");
+      }
     }
 
-    const userId = decoded.id;
+    /* =========================
+       🔐 PRIORITY 2 → TOKEN (APP FLOW)
+    ========================= */
+    if (!user && token) {
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        user = await User.findById(decoded.id);
 
-    console.log("👤 User ID:", userId);
-    console.log("🆔 Installation ID:", installation_id);
+        console.log("✅ User from token:", user?._id);
 
-    const user = await User.findById(userId);
+      } catch (err) {
+        console.log("❌ Invalid token");
+      }
+    }
 
+    /* =========================
+       ❌ USER NOT FOUND
+    ========================= */
     if (!user) {
       console.log("❌ User not found");
-      return res.status(404).send("User not found");
+      return res.redirect(`${process.env.FRONTEND_URL}/login`);
     }
 
-    // ✅ SAVE INSTALLATION
+    /* =========================
+       ✅ SAVE INSTALLATION
+    ========================= */
     user.installationId = Number(installation_id);
     await user.save();
 
-    console.log("✅ Installation linked to user:", user._id);
+    console.log("✅ Installation linked:", installation_id);
 
     /* =========================
-       🔁 REDIRECT FRONTEND
+       🔁 REDIRECT FRONTEND (IMPORTANT)
     ========================= */
     const FRONTEND = process.env.FRONTEND_URL || "http://localhost:5173";
 
-    return res.redirect(`${FRONTEND}/dashboard`);
+    // 🔥 VERY IMPORTANT: query param send karo
+    return res.redirect(
+      `${FRONTEND}/dashboard?installation_id=${installation_id}`
+    );
 
   } catch (err) {
     console.log("❌ CALLBACK ERROR:", err.message);
-    return res.status(500).send("Internal Server Error");
+    return res.redirect(`${process.env.FRONTEND_URL}/error`);
   }
 });
 

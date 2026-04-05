@@ -13,23 +13,28 @@ import { calculateRisk } from "../utils/risk.util.js";
 
 import { pushToTigerGraph } from "../services/tigergraph.service.js";
 import { generateAIInsights } from "../services/ai.service.js";
-import { sendNotification } from "../services/firebase.service.js";
+import { sendNotification, writeToFirestore } from "../services/firebase.service.js"; // 🔥 ADD
 
 import {
-findNewVulnerabilities,
-findFixedVulnerabilities,
-generateAlerts
+  findNewVulnerabilities,
+  findFixedVulnerabilities,
+  generateAlerts
 } from "../utils/diff.util.js";
+
+/* =========================
+   🔥 SEVERITY NORMALIZER
+========================= */
 const normalizeSeverity = (sev) => {
   if (!sev) return "LOW";
 
   const s = sev.toUpperCase();
 
-  if (s === "MODERATE") return "MEDIUM"; // 🔥 MAIN FIX
+  if (s === "MODERATE") return "MEDIUM";
   if (["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(s)) return s;
 
   return "LOW";
 };
+
 export const analyzeRepo = async (req, res) => {
   const TIMEOUT = 25000;
 
@@ -117,7 +122,6 @@ export const analyzeRepo = async (req, res) => {
     }
 
     console.log("🌳 TREE SIZE:", tree.length);
-    console.log("🌳 TREE SAMPLE:", tree.slice(0, 5));
 
     /* ========================= UNIQUE DEPS ========================= */
     const seen = new Set();
@@ -138,9 +142,6 @@ export const analyzeRepo = async (req, res) => {
         type: "prod"
       }));
 
-    console.log(`📦 Dependencies Saved: ${uniqueDeps.length}`);
-    console.log("📦 SAMPLE DEP:", uniqueDeps[0]);
-
     await Dependency.insertMany(uniqueDeps, { ordered: false }).catch(() => {});
 
     /* ========================= VULNERABILITIES ========================= */
@@ -150,18 +151,15 @@ export const analyzeRepo = async (req, res) => {
       const vulns = await checkVulnerabilities(uniqueDeps);
 
       formattedVulns = vulns.map(v => ({
-  repoId: repoIdStr,
-  versionGroup: newVersion,
-  package: v.package?.toLowerCase(),
-  version: String(v.version || ""),
-
-  // 🔥 FIXED LINE
-  severity: normalizeSeverity(v.severity),
-
-  cve: v.cve,
-  fix: v.fix,
-  description: v.description || ""
-}));
+        repoId: repoIdStr,
+        versionGroup: newVersion,
+        package: v.package?.toLowerCase(),
+        version: String(v.version || ""),
+        severity: normalizeSeverity(v.severity),
+        cve: v.cve,
+        fix: v.fix,
+        description: v.description || ""
+      }));
 
       await Vulnerability.insertMany(formattedVulns, { ordered: false }).catch(() => {});
     } catch {
@@ -171,68 +169,53 @@ export const analyzeRepo = async (req, res) => {
     console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
 
     /* ========================= ALERTS ========================= */
-    /* ========================= ALERTS ========================= */
-/* ========================= ALERTS (FIXED 🔥) ========================= */
-/* ========================= ALERTS ========================= */
-/* ========================= ALERTS (FINAL FIXED 🔥) ========================= */
-let alerts = [];
+    let alerts = [];
 
-try {
-  const repoObjectId = repo._id;
+    try {
+      const repoObjectId = repo._id;
 
-  // 🔥 CLEAN VALID VULNS
-  const safeVulns = formattedVulns.filter(
-    v => v.package && v.severity
-  );
+      const safeVulns = formattedVulns.filter(v => v.package && v.severity);
 
-  console.log("🧹 CLEAN VULNS:", safeVulns.length);
+      let newVulns = [];
+      let fixedVulns = [];
 
-  let newVulns = [];
-  let fixedVulns = [];
+      if (newVersion === 1) {
+        newVulns = safeVulns;
+      } else {
+        const previousVulns = await Vulnerability.find({
+          repoId: repoIdStr,
+          versionGroup: newVersion - 1
+        }).lean();
 
-  if (newVersion === 1) {
-    // 🟢 FIRST SCAN → ALL ALERTS
-    console.log("🟢 FIRST SCAN → ALL ALERTS");
+        newVulns = findNewVulnerabilities(previousVulns, safeVulns);
+        fixedVulns = findFixedVulnerabilities(previousVulns, safeVulns);
+      }
 
-    newVulns = safeVulns;
+      alerts = generateAlerts(repoObjectId, newVulns, fixedVulns);
 
-  } else {
-    // 🔵 DIFF BASED ALERTS
-    const previousVulns = await Vulnerability.find({
-      repoId: repoIdStr,
-      versionGroup: newVersion - 1
-    }).lean();
+      alerts = alerts.filter(a =>
+        a.package &&
+        ["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(a.severity)
+      );
 
-    newVulns = findNewVulnerabilities(previousVulns, safeVulns);
-    fixedVulns = findFixedVulnerabilities(previousVulns, safeVulns);
+      if (alerts.length > 0) {
+        await Alert.insertMany(alerts);
+      }
 
-    console.log("🆕 NEW:", newVulns.length);
-    console.log("✅ FIXED:", fixedVulns.length);
-  }
+    } catch (err) {
+      console.log("❌ ALERT ERROR:", err.message);
+    }
 
-  // 🔥 GENERATE ALERTS
-  alerts = generateAlerts(repoObjectId, newVulns, fixedVulns);
+    /* ========================= AI (🔥 FIXED LIMIT + SAFE) ========================= */
+    let aiInsights = [];
 
-  // 🔥 FINAL SAFETY FILTER (IMPORTANT)
-  alerts = alerts.filter(a =>
-    a.package &&
-    ["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(a.severity)
-  );
+    try {
+      // 🔥 Only generate once per scan (limit)
+      aiInsights = await generateAIInsights(formattedVulns.slice(0, 5));
+    } catch {
+      console.log("⚠️ AI failed");
+    }
 
-  console.log("📢 FINAL ALERTS:", alerts.length);
-
-  // 🔥 SAVE
-  if (alerts.length > 0) {
-    const result = await Alert.insertMany(alerts);
-
-    console.log("✅ ALERTS SAVED:", result.length);
-  } else {
-    console.log("⚠️ NO ALERTS TO SAVE");
-  }
-
-} catch (err) {
-  console.log("❌ ALERT ERROR:", err.message);
-}
     /* ========================= PUSH NOTIFICATION ========================= */
     try {
       const user = await User.findById(repo.userId);
@@ -241,15 +224,30 @@ try {
         await sendNotification(
           user.fcmToken,
           "🚨 Security Alert",
-          `${alerts.length} new vulnerabilities detected`
+          `${alerts.length} new vulnerabilities detected`,
+          {
+            repoId: repoIdStr
+          }
         );
       }
     } catch (err) {
       console.log("❌ Push failed:", err.message);
     }
 
-    /* ========================= TIGERGRAPH ========================= */
+    /* ========================= 🔥 FIRESTORE REALTIME ========================= */
+    try {
+      await writeToFirestore({
+        repoId: repoIdStr,
+        alerts,
+        vulnerabilities: formattedVulns,
+        riskScore: calculateRisk(formattedVulns),
+        version: newVersion
+      });
+    } catch (err) {
+      console.log("❌ Firestore write failed:", err.message);
+    }
 
+    /* ========================= TIGERGRAPH ========================= */
     const depEdges = tree
       .filter(d => d.parent)
       .map(d => ({
@@ -257,21 +255,9 @@ try {
         to: d.name.toLowerCase()
       }));
 
-    console.log("🔗 DEP EDGES COUNT:", depEdges.length);
-    console.log("🔗 DEP EDGES SAMPLE:", depEdges.slice(0, 5));
-
-    if (depEdges.length === 0) {
-      console.log("❌ NO DEPENDENCY CHAIN FOUND → TigerGraph will be EMPTY");
-    }
-
-    console.log("🚀 PUSHING TO TIGERGRAPH...");
-
     await pushToTigerGraph(
       repoIdStr,
-      uniqueDeps.map(d => ({
-        name: d.name,
-        version: d.version
-      })),
+      uniqueDeps.map(d => ({ name: d.name, version: d.version })),
       formattedVulns.map(v => ({
         package: v.package,
         cve: v.cve,
@@ -279,8 +265,8 @@ try {
         description: v.description
       })),
       depEdges
-    ).catch((err) => {
-      console.log("❌ TigerGraph push failed:", err.message);
+    ).catch(() => {
+      console.log("⚠️ TigerGraph failed");
     });
 
     /* ========================= RISK ========================= */
@@ -348,7 +334,7 @@ try {
   }
 };
 
-/* ========================= SOCKET EMIT ========================= */
+/* ========================= SOCKET ========================= */
 const emitResult = (req, repoIdStr, repo, risk, deps, vulns, aiInsights = []) => {
   const io = req.app.get("io");
 

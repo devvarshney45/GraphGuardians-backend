@@ -3,6 +3,7 @@ import Vulnerability from "../models/vulnerability.model.js";
 import Alert from "../models/alert.model.js";
 import Repo from "../models/repo.model.js";
 import ScanHistory from "../models/scanHistory.model.js";
+import User from "../models/user.model.js";
 
 import { fetchPackageJson } from "./github.service.js";
 import { extractDependencies } from "../utils/parser.util.js";
@@ -14,6 +15,8 @@ import { getDependencyTree } from "./dependencyTree.service.js";
 import { extractDependencyEdges } from "../utils/treeParser.util.js";
 
 import { pushToTigerGraph } from "./tigergraph.service.js";
+import { sendNotification } from "./firebase.service.js";
+
 import {
   compareDependencies,
   findNewVulnerabilities,
@@ -33,6 +36,7 @@ export const runAnalysis = async (url, repoId, token) => {
 
     const currentVersion = repo.scanCount || 0;
     const newVersion = currentVersion + 1;
+    const repoIdStr = String(repoId);
 
     console.log(`📦 Repo: ${repo.name}`);
     console.log(`🔢 Version: ${currentVersion} → ${newVersion}`);
@@ -174,28 +178,58 @@ export const runAnalysis = async (url, repoId, token) => {
     console.log(`🔗 Dependency edges: ${depEdges.length}`);
 
     /* =========================
-       🧠 NEO4J GRAPH PUSH
+       🧠 TIGERGRAPH SYNC
     ========================= */
-    // REMOVE:
-try {
-  await pushToNeo4j(repoId, uniqueDeps, formattedVulns, depEdges);
-  console.log("🧠 Neo4j Sync Done ✅");
-} catch (err) {
-  console.log("⚠️ Neo4j error:", err.message);
-}
+    try {
+      await pushToTigerGraph(
+        repoIdStr,
+        uniqueDeps.map(d => ({ name: d.name, version: d.version })),
+        formattedVulns,
+        depEdges
+      );
+      console.log("🧠 TigerGraph Sync Done ✅");
+    } catch (err) {
+      console.log("⚠️ TigerGraph error:", err.message);
+    }
 
-// ADD:
-try {
-  await pushToTigerGraph(
-    repoId,
-    uniqueDeps.map(d => ({ name: d.name, version: d.version })),
-    formattedVulns,
-    depEdges
-  );
-  console.log("🧠 TigerGraph Sync Done ✅");
-} catch (err) {
-  console.log("⚠️ TigerGraph error:", err.message);
-}
+    /* =========================
+       📲 PUSH NOTIFICATION (FCM)
+    ========================= */
+    try {
+      const user = await User.findById(repo.userId);
+
+      if (user?.fcmToken && alerts.length > 0) {
+        await sendNotification(
+          user.fcmToken,
+          "🚨 Security Alert",
+          `${alerts.length} new vulnerabilities detected`,
+          { repoId: repoIdStr }
+        );
+        console.log("📲 FCM Notification sent");
+      }
+    } catch (err) {
+      console.log("❌ Notification error:", err.message);
+    }
+
+    /* =========================
+       🔥 FIRESTORE WRITE
+    ========================= */
+    try {
+      const admin = await import("../config/firebase.config.js");
+      await admin.default.firestore()
+        .collection("alerts")
+        .doc(repoIdStr)
+        .set({
+          alerts,
+          vulnerabilities: formattedVulns,
+          riskScore: risk,
+          version: newVersion,
+          updatedAt: new Date()
+        });
+      console.log("🔥 Firestore updated");
+    } catch (err) {
+      console.log("❌ Firestore write failed:", err.message);
+    }
 
     /* =========================
        📊 SCAN HISTORY

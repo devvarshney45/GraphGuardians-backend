@@ -3,7 +3,7 @@ import Vulnerability from "../models/vulnerability.model.js";
 import Alert from "../models/alert.model.js";
 import Repo from "../models/repo.model.js";
 import ScanHistory from "../models/scanHistory.model.js";
-import User from "../models/user.model.js"; // 🔥 ADD
+import User from "../models/user.model.js";
 
 import { fetchPackageJson } from "./github.service.js";
 import { extractDependencies } from "../utils/parser.util.js";
@@ -15,7 +15,7 @@ import { getDependencyTree } from "./dependencyTree.service.js";
 import { extractDependencyEdges } from "../utils/treeParser.util.js";
 
 import { pushToTigerGraph } from "./tigergraph.service.js";
-import { sendNotification, writeToFirestore } from "./firebase.service.js"; // 🔥 ADD
+import { sendNotification, writeToFirestore } from "./firebase.service.js";
 
 import {
   compareDependencies,
@@ -27,6 +27,17 @@ import {
 export const runAnalysis = async (url, repoId, token) => {
   try {
     console.log("\n🚀 ===============================");
+
+    /* =========================
+       🔐 VALIDATE TOKEN (🔥 FIX)
+    ========================= */
+    if (!token) {
+      console.log("❌ Missing GitHub token");
+      return;
+    }
+
+    console.log("🔑 Token present:", !!token);
+    console.log("🌐 Repo URL:", url);
 
     /* =========================
        🔐 GET REPO
@@ -52,21 +63,34 @@ export const runAnalysis = async (url, repoId, token) => {
       : [];
 
     /* =========================
-       📥 FETCH package.json
+       📥 FETCH package.json (🔥 FIX SAFE)
     ========================= */
-    const pkg = await fetchPackageJson(url, token);
-    console.log("📥 package.json fetched");
+    let pkg;
+
+    try {
+      pkg = await fetchPackageJson(url, token);
+      console.log("📥 package.json fetched");
+    } catch (err) {
+      console.log("❌ package.json fetch failed:", err.message);
+
+      await Repo.findByIdAndUpdate(repoId, {
+        status: "scanned",
+        riskScore: 0
+      });
+
+      return;
+    }
 
     /* =========================
        📦 EXTRACT DEPENDENCIES
     ========================= */
-    const rawDeps = extractDependencies(pkg);
+    const rawDeps = extractDependencies(pkg) || [];
 
     const seen = new Set();
     const uniqueDeps = [];
 
     for (const d of rawDeps) {
-      if (!d.name) continue;
+      if (!d?.name) continue;
 
       const name = d.name.toLowerCase().trim();
       const key = `${name}_${newVersion}`;
@@ -100,33 +124,39 @@ export const runAnalysis = async (url, repoId, token) => {
        💾 SAVE DEPENDENCIES
     ========================= */
     if (uniqueDeps.length > 0) {
-      await Dependency.insertMany(uniqueDeps, { ordered: false });
+      await Dependency.insertMany(uniqueDeps, { ordered: false }).catch(() => {});
     }
 
     /* =========================
-       🚨 VULNERABILITIES
+       🚨 VULNERABILITIES (🔥 SAFE)
     ========================= */
-    const vulns = await checkVulnerabilities(uniqueDeps);
+    let vulns = [];
 
-    const formattedVulns = vulns.map(v => ({
+    try {
+      vulns = await checkVulnerabilities(uniqueDeps);
+    } catch (err) {
+      console.log("❌ Vulnerability check failed:", err.message);
+    }
+
+    const formattedVulns = (vulns || []).map(v => ({
       repoId,
       versionGroup: newVersion,
-      package: v.package?.toLowerCase().trim(),
+      package: v.package?.toLowerCase()?.trim(),
       version: v.version,
-      severity: v.severity || "unknown",
+      severity: v.severity || "LOW",
       description: v.description,
       cve: v.cve,
       fix: v.fix
     }));
 
     if (formattedVulns.length > 0) {
-      await Vulnerability.insertMany(formattedVulns, { ordered: false });
+      await Vulnerability.insertMany(formattedVulns, { ordered: false }).catch(() => {});
     }
 
     console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
 
     /* =========================
-       🔔 ALERTS (SMART)
+       🔔 ALERTS
     ========================= */
     const newVulns = findNewVulnerabilities(oldVulns, formattedVulns);
     const fixedVulns = findFixedVulnerabilities(oldVulns, formattedVulns);
@@ -134,7 +164,7 @@ export const runAnalysis = async (url, repoId, token) => {
     const alerts = generateAlerts(repoId, newVulns, fixedVulns);
 
     if (alerts.length > 0) {
-      await Alert.insertMany(alerts);
+      await Alert.insertMany(alerts).catch(() => {});
       console.log(`🔔 Alerts generated: ${alerts.length}`);
     } else {
       console.log("✅ No new alerts");
@@ -157,7 +187,7 @@ export const runAnalysis = async (url, repoId, token) => {
     }
 
     /* =========================
-       🌳 DEPENDENCY TREE
+       🌳 DEPENDENCY TREE (🔥 SAFE)
     ========================= */
     let depEdges = [];
 
@@ -167,7 +197,7 @@ export const runAnalysis = async (url, repoId, token) => {
       const tree = await getDependencyTree(url, token);
 
       if (tree) {
-        depEdges = extractDependencyEdges(tree);
+        depEdges = extractDependencyEdges(tree) || [];
       }
 
     } catch (err) {
@@ -177,7 +207,7 @@ export const runAnalysis = async (url, repoId, token) => {
     console.log(`🔗 Dependency edges: ${depEdges.length}`);
 
     /* =========================
-       🧠 TIGERGRAPH ONLY (FIXED)
+       🧠 TIGERGRAPH
     ========================= */
     try {
       await pushToTigerGraph(
@@ -197,9 +227,6 @@ export const runAnalysis = async (url, repoId, token) => {
     try {
       const user = await User.findById(repo.userId);
 
-      console.log("📊 Alerts:", alerts.length);
-      console.log("👤 User token:", user?.fcmToken);
-
       if (user?.fcmToken && alerts.length > 0) {
         await sendNotification(
           user.fcmToken,
@@ -215,7 +242,7 @@ export const runAnalysis = async (url, repoId, token) => {
     }
 
     /* =========================
-       🔥 FIRESTORE REALTIME
+       🔥 FIRESTORE
     ========================= */
     try {
       await writeToFirestore({
@@ -240,7 +267,7 @@ export const runAnalysis = async (url, repoId, token) => {
       riskScore: risk,
       dependencyCount: uniqueDeps.length,
       vulnerabilityCount: formattedVulns.length
-    });
+    }).catch(() => {});
 
     /* =========================
        🔄 UPDATE REPO
@@ -257,9 +284,6 @@ export const runAnalysis = async (url, repoId, token) => {
     console.log("📊 Scan Completed ✅");
     console.log("==================================\n");
 
-    /* =========================
-       📦 RETURN
-    ========================= */
     return {
       version: newVersion,
       dependencies: uniqueDeps,

@@ -13,7 +13,7 @@ import { calculateRisk } from "../utils/risk.util.js";
 
 import { pushToTigerGraph } from "../services/tigergraph.service.js";
 import { generateAIInsights } from "../services/ai.service.js";
-import { sendNotification, writeToFirestore } from "../services/firebase.service.js"; // 🔥 ADD
+import { sendNotification, writeToFirestore } from "../services/firebase.service.js";
 
 import {
   findNewVulnerabilities,
@@ -46,6 +46,11 @@ export const analyzeRepo = async (req, res) => {
   const response = res?.status ? res : safeRes;
 
   const main = async () => {
+
+    console.log("📡 Scan Triggered By:",
+      req.headers["x-github-event"] ? "WEBHOOK (COMMIT)" : "MANUAL (ADD REPO)"
+    );
+
     const { url, repoId, token } = req.body;
 
     const repo = await Repo.findById(repoId);
@@ -142,6 +147,8 @@ export const analyzeRepo = async (req, res) => {
         type: "prod"
       }));
 
+    console.log(`📦 Dependencies Saved: ${uniqueDeps.length}`);
+
     await Dependency.insertMany(uniqueDeps, { ordered: false }).catch(() => {});
 
     /* ========================= VULNERABILITIES ========================= */
@@ -180,8 +187,11 @@ export const analyzeRepo = async (req, res) => {
       let fixedVulns = [];
 
       if (newVersion === 1) {
+        console.log("🟢 FIRST SCAN");
         newVulns = safeVulns;
       } else {
+        console.log("🔵 DIFF SCAN");
+
         const previousVulns = await Vulnerability.find({
           repoId: repoIdStr,
           versionGroup: newVersion - 1
@@ -189,6 +199,9 @@ export const analyzeRepo = async (req, res) => {
 
         newVulns = findNewVulnerabilities(previousVulns, safeVulns);
         fixedVulns = findFixedVulnerabilities(previousVulns, safeVulns);
+
+        console.log("🆕 NEW:", newVulns.length);
+        console.log("✅ FIXED:", fixedVulns.length);
       }
 
       alerts = generateAlerts(repoObjectId, newVulns, fixedVulns);
@@ -198,20 +211,23 @@ export const analyzeRepo = async (req, res) => {
         ["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(a.severity)
       );
 
+      console.log("📢 FINAL ALERTS:", alerts.length);
+
       if (alerts.length > 0) {
         await Alert.insertMany(alerts);
+        console.log("✅ ALERTS SAVED");
       }
 
     } catch (err) {
       console.log("❌ ALERT ERROR:", err.message);
     }
 
-    /* ========================= AI (🔥 FIXED LIMIT + SAFE) ========================= */
+    /* ========================= AI ========================= */
     let aiInsights = [];
 
     try {
-      // 🔥 Only generate once per scan (limit)
       aiInsights = await generateAIInsights(formattedVulns.slice(0, 5));
+      console.log("🤖 AI GENERATED");
     } catch {
       console.log("⚠️ AI failed");
     }
@@ -221,21 +237,31 @@ export const analyzeRepo = async (req, res) => {
       const user = await User.findById(repo.userId);
 
       if (user?.fcmToken && alerts.length > 0) {
+
+        console.log("📤 Sending notification...");
+        console.log("📱 Token:", user.fcmToken);
+
         await sendNotification(
           user.fcmToken,
           "🚨 Security Alert",
           `${alerts.length} new vulnerabilities detected`,
-          {
-            repoId: repoIdStr
-          }
+          { repoId: repoIdStr }
         );
+
+        console.log("📲 Notifications sent SUCCESS");
+
+      } else {
+        console.log("⚠️ Notification skipped");
       }
+
     } catch (err) {
       console.log("❌ Push failed:", err.message);
     }
 
-    /* ========================= 🔥 FIRESTORE REALTIME ========================= */
+    /* ========================= FIRESTORE ========================= */
     try {
+      console.log("🔥 Writing to Firestore...");
+
       await writeToFirestore({
         repoId: repoIdStr,
         alerts,
@@ -243,6 +269,9 @@ export const analyzeRepo = async (req, res) => {
         riskScore: calculateRisk(formattedVulns),
         version: newVersion
       });
+
+      console.log("🔥 Firestore updated SUCCESS");
+
     } catch (err) {
       console.log("❌ Firestore write failed:", err.message);
     }
@@ -254,6 +283,8 @@ export const analyzeRepo = async (req, res) => {
         from: d.parent.toLowerCase(),
         to: d.name.toLowerCase()
       }));
+
+    console.log("🔗 DEP EDGES:", depEdges.length);
 
     await pushToTigerGraph(
       repoIdStr,

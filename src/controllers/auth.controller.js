@@ -19,7 +19,6 @@ const generateToken = (userId) => {
 
 /* =========================
    🔑 GET INSTALLATION TOKEN
-   (GitHub App → Installation access token)
 ========================= */
 const getInstallationToken = async (installationId) => {
   const appId      = process.env.GITHUB_APP_ID;
@@ -29,10 +28,8 @@ const getInstallationToken = async (installationId) => {
     throw new Error("GITHUB_APP_ID or GITHUB_PRIVATE_KEY missing");
   }
 
-  // JWT for GitHub App auth
   const now = Math.floor(Date.now() / 1000);
   const payload = { iat: now - 60, exp: now + 600, iss: appId };
-
   const appJwt = jwt.sign(payload, privateKey, { algorithm: "RS256" });
 
   const res = await axios.post(
@@ -109,12 +106,10 @@ export const login = async (req, res) => {
 
 /* =========================
    🔗 GITHUB OAUTH — STEP 1
-   Redirect to GitHub login
 ========================= */
 export const githubLogin = (req, res) => {
   console.log("🚀 GitHub OAuth started");
 
-  // state = "web" | "app"  (mobile app sends state=app)
   const state = req.query.state || "web";
 
   const url =
@@ -129,7 +124,6 @@ export const githubLogin = (req, res) => {
 
 /* =========================
    🔗 GITHUB OAUTH — STEP 2
-   Callback after GitHub login
 ========================= */
 export const githubCallback = async (req, res) => {
   try {
@@ -144,7 +138,6 @@ export const githubCallback = async (req, res) => {
         : res.redirect(`${FRONTEND}/login?error=no_code`);
     }
 
-    /* ── Exchange code for access token ── */
     const tokenRes = await axios.post(
       "https://github.com/login/oauth/access_token",
       {
@@ -163,13 +156,11 @@ export const githubCallback = async (req, res) => {
         : res.redirect(`${FRONTEND}/login?error=token_failed`);
     }
 
-    /* ── Get GitHub user info ── */
     const githubRes  = await axios.get("https://api.github.com/user", {
       headers: { Authorization: `token ${accessToken}` },
     });
     const githubUser = githubRes.data;
 
-    /* ── Find or create user ── */
     let user = await User.findOne({ githubId: githubUser.id });
 
     if (!user && githubUser.email) {
@@ -184,6 +175,7 @@ export const githubCallback = async (req, res) => {
         githubUsername:    githubUser.login.toLowerCase(),
         githubAccessToken: accessToken,
         avatar:            githubUser.avatar_url,
+        fcmTokens:         []
       });
     } else {
       user.githubId          = githubUser.id;
@@ -195,15 +187,8 @@ export const githubCallback = async (req, res) => {
 
     const token = generateToken(user._id);
 
-    /* ════════════════════════════════════════
-       🔍 CHECK GITHUB APP INSTALLATION
-       Method 1: DB mein installationId saved hai?
-       Method 2: GitHub API se live check
-    ════════════════════════════════════════ */
-
     let isInstalled = false;
 
-    // Method 1: DB check
     if (user.installationId) {
       try {
         await getInstallationToken(user.installationId);
@@ -216,7 +201,6 @@ export const githubCallback = async (req, res) => {
       }
     }
 
-    // Method 2: Live API check (agar DB mein nahi tha)
     if (!isInstalled) {
       try {
         const installRes = await axios.get(
@@ -234,7 +218,6 @@ export const githubCallback = async (req, res) => {
 
         if (found) {
           isInstalled = true;
-          // Save to DB for future use
           user.installationId = found.id;
           await user.save();
           console.log("✅ Installation found via API:", found.id);
@@ -244,35 +227,21 @@ export const githubCallback = async (req, res) => {
       }
     }
 
-    /* ════════════════════════════════════════
-       🚀 REDIRECT BASED ON INSTALLATION STATUS
-    ════════════════════════════════════════ */
-
     if (isInstalled) {
-      // ✅ App installed → go to dashboard
       console.log("✅ App installed → Dashboard");
-
-      if (isMobileApp) {
-        return res.redirect(`myapp://auth?token=${token}`);
-      }
+      if (isMobileApp) return res.redirect(`myapp://auth?token=${token}`);
       return res.redirect(`${FRONTEND}/auth/success?token=${token}`);
-
     } else {
-      // ❌ App not installed → install page
       console.log("⚠️ App NOT installed → Install page");
-
       const installUrl =
         `https://github.com/apps/${APP_SLUG}/installations/new` +
-        `?state=${token}`;  // state mein token pass karo
+        `?state=${token}`;
 
       if (isMobileApp) {
-        // Mobile: deep link se install page open
         return res.redirect(
           `myapp://install?url=${encodeURIComponent(installUrl)}&token=${token}`
         );
       }
-
-      // Web: install page pe redirect
       return res.redirect(
         `${FRONTEND}/install?url=${encodeURIComponent(installUrl)}&token=${token}`
       );
@@ -286,15 +255,12 @@ export const githubCallback = async (req, res) => {
 
 /* =========================
    🔗 GITHUB APP INSTALL CALLBACK
-   GitHub app install hone ke baad yahan aata hai
 ========================= */
 export const githubInstallCallback = async (req, res) => {
   try {
     console.log("📥 Install Callback HIT", req.query);
 
     const { installation_id, setup_action, state } = req.query;
-
-    // state mein JWT token pass kiya tha
     const token = state;
 
     if (setup_action === "install" && installation_id && token) {
@@ -311,7 +277,6 @@ export const githubInstallCallback = async (req, res) => {
       }
     }
 
-    // After install → dashboard
     return res.redirect(`${FRONTEND}/auth/success?token=${token}&installed=true`);
 
   } catch (err) {
@@ -347,25 +312,32 @@ export const getMe = async (req, res) => {
 };
 
 /* =========================
-   🔔 SAVE DEVICE TOKEN
+   🔔 SAVE DEVICE TOKEN (FCM)
+   Flutter app se token aata hai → MongoDB mein save hota hai
 ========================= */
 export const saveDeviceToken = async (req, res) => {
   try {
     const { token } = req.body;
-    if (!token) return res.status(400).json({ msg: "Device token required" });
 
-    const user = await User.findById(req.user.id);
-    if (!user) return res.status(404).json({ msg: "User not found" });
-
-    if (!user.fcmTokens) user.fcmTokens = [];
-
-    if (!user.fcmTokens.includes(token)) {
-      user.fcmTokens.push(token);
-      await user.save();
+    if (!token) {
+      return res.status(400).json({ msg: "Device token required" });
     }
 
-    res.json({ msg: "Device token saved successfully" });
+    // Array mein add karo — duplicate nahi chahiye
+    await User.findByIdAndUpdate(
+      req.user.id,
+      {
+        $addToSet: { fcmTokens: token }   // addToSet = duplicate prevent
+      },
+      { new: true }
+    );
+
+    console.log(`📱 FCM token saved for user: ${req.user.id}`);
+
+    res.json({ success: true, msg: "Device token saved successfully" });
+
   } catch (err) {
+    console.log("❌ Save device token error:", err.message);
     res.status(500).json({ error: err.message });
   }
 };

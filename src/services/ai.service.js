@@ -40,108 +40,70 @@ const callAI = async (payload, retries = 2) => {
 /* =========================
    🤖 MAIN FUNCTION
 ========================= */
-export const generateAIInsights = async (vulnerabilities = []) => {
-  try {
-    if (!vulnerabilities.length) {
-      return {
-        summary: "No vulnerabilities found",
-        issues: []
-      };
-    }
+// ✅ Single call mein top 5 vulns ka analysis
+export const generateAIInsights = async (vulns) => {
+  // Sirf top 5 critical/high lo
+  const priority = vulns
+    .filter(v => ["CRITICAL", "HIGH"].includes(v.severity))
+    .slice(0, 5);
 
-    /* =========================
-       🔥 CACHE KEY (STABLE)
-    ========================= */
-    const cacheKey = JSON.stringify(
-      vulnerabilities
-        .map(v => `${v.package}-${v.severity}`)
-        .sort() // 🔥 IMPORTANT FIX
-    );
+  if (priority.length === 0) return fallbackInsights(vulns);
 
-    if (aiCache.has(cacheKey)) {
-      console.log("⚡ AI cache hit");
-      return aiCache.get(cacheKey);
-    }
+  // ✅ EK hi call mein sab
+  const prompt = `
+You are a security expert. Analyze these ${priority.length} vulnerabilities 
+and give ONE combined JSON response.
 
-    /* =========================
-       🔥 LIMIT INPUT
-    ========================= */
-    const limited = vulnerabilities.slice(0, 10);
+Vulnerabilities:
+${priority.map((v, i) => `${i+1}. Package: ${v.package}, ID: ${v.id}, Severity: ${v.severity}`).join("\n")}
 
-    const prompt = `
-You are a security expert.
-
-Return STRICT JSON:
+Respond ONLY with this JSON (no markdown):
 {
-  "summary": "...",
+  "summary": "2-3 line overall risk assessment",
+  "riskLevel": "CRITICAL|HIGH|MEDIUM|LOW",
   "issues": [
     {
-      "package": "",
-      "explanation": "",
-      "risk": "",
-      "fix": "",
-      "bestPractice": ""
+      "package": "name",
+      "explanation": "why dangerous",
+      "risk": "severity",
+      "fix": "npm install package@version",
+      "bestPractice": "one line tip"
     }
-  ]
-}
+  ],
+  "topAction": "single most important fix right now"
+}`;
 
-Analyze:
-
-${limited.map(v => `
-Package: ${v.package}
-Severity: ${v.severity}
-`).join("\n")}
-`;
-
-    /* =========================
-       📡 CALL AI
-    ========================= */
-    const response = await callAI({
-      model: "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.2
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",        // ✅ gpt-4 nahi — cheaper + faster
+      max_tokens: 800,
+      temperature: 0.3,
+      messages: [{ role: "user", content: prompt }]
     });
 
-    let aiText = response.choices[0].message.content;
-
-    aiText = aiText.replace(/```json/g, "").replace(/```/g, "").trim();
-
-    let parsed;
-
-    try {
-      parsed = JSON.parse(aiText);
-    } catch {
-      parsed = {
-        summary: "Security risks detected",
-        issues: limited.map(v => ({
-          package: v.package,
-          explanation: "Security issue",
-          risk: `${v.severity} vulnerability`,
-          fix: `npm update ${v.package}`,
-          bestPractice: "Keep dependencies updated"
-        }))
-      };
-    }
-
-    /* =========================
-       💾 CACHE SAVE
-    ========================= */
-    aiCache.set(cacheKey, parsed);
-
-    return parsed;
+    const raw = response.choices[0].message.content;
+    return JSON.parse(raw.replace(/```json|```/g, "").trim());
 
   } catch (err) {
-    console.log("❌ AI failed, fallback used");
-
-    return {
-      summary: "AI unavailable",
-      issues: vulnerabilities.slice(0, 10).map(v => ({
-        package: v.package,
-        explanation: "Security issue detected",
-        risk: `${v.severity || "unknown"} risk`,
-        fix: `npm install ${v.package}@latest`,
-        bestPractice: "Run npm audit"
-      }))
-    };
+    console.log("❌ AI failed:", err.message);
+    return fallbackInsights(vulns);
   }
+};
+
+// ✅ Fallback — AI nahi aya toh bhi kuch show karo
+const fallbackInsights = (vulns) => {
+  const critical = vulns.filter(v => v.severity === "CRITICAL");
+  const high = vulns.filter(v => v.severity === "HIGH");
+  return {
+    summary: `Found ${vulns.length} vulnerabilities. ${critical.length} critical, ${high.length} high priority.`,
+    riskLevel: critical.length > 0 ? "CRITICAL" : high.length > 0 ? "HIGH" : "MEDIUM",
+    topAction: critical[0] ? `Fix ${critical[0].package} immediately` : "Run npm audit fix",
+    issues: vulns.slice(0, 5).map(v => ({
+      package: v.package,
+      explanation: "Security vulnerability detected",
+      risk: v.severity,
+      fix: `npm install ${v.package}@latest`,
+      bestPractice: "Keep dependencies updated"
+    }))
+  };
 };

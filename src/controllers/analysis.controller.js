@@ -16,9 +16,9 @@ import { generateAIInsights } from "../services/ai.service.js";
 import { sendNotification } from "../services/firebase.service.js";
 
 import {
-findNewVulnerabilities,
-findFixedVulnerabilities,
-generateAlerts
+  findNewVulnerabilities,
+  findFixedVulnerabilities,
+  generateAlerts
 } from "../utils/diff.util.js";
 
 export const analyzeRepo = async (req, res) => {
@@ -171,6 +171,8 @@ export const analyzeRepo = async (req, res) => {
       await Alert.insertMany(alerts).catch(() => {});
     } catch {}
 
+    console.log(`🔔 Alerts: ${alerts.length}`);
+
     /* ========================= AI ========================= */
     let aiInsights = [];
 
@@ -185,23 +187,7 @@ export const analyzeRepo = async (req, res) => {
       aiInsights = [];
     }
 
-    /* ========================= PUSH NOTIFICATION ========================= */
-    try {
-      const user = await User.findById(repo.userId);
-
-      if (user?.fcmToken && alerts.length > 0) {
-        await sendNotification(
-          user.fcmToken,
-          "🚨 Security Alert",
-          `${alerts.length} new vulnerabilities detected`
-        );
-      }
-    } catch (err) {
-      console.log("❌ Push failed:", err.message);
-    }
-
     /* ========================= TIGERGRAPH ========================= */
-
     const depEdges = tree
       .filter(d => d.parent)
       .map(d => ({
@@ -237,7 +223,46 @@ export const analyzeRepo = async (req, res) => {
 
     /* ========================= RISK ========================= */
     const risk = calculateRisk(formattedVulns);
+    console.log(`⚠️ Risk Score: ${risk}`);
 
+    /* ========================= PUSH NOTIFICATION (FCM) ========================= */
+    try {
+      const user = await User.findById(repo.userId);
+
+      if (user?.fcmToken && alerts.length > 0) {
+        await sendNotification(
+          user.fcmToken,
+          "🚨 Security Alert",
+          `${alerts.length} new vulnerabilities detected`,
+          { repoId: repoIdStr }
+        );
+        console.log("📲 FCM Notification sent");
+      } else {
+        console.log("📲 FCM skipped — no token or no alerts");
+      }
+    } catch (err) {
+      console.log("❌ Push failed:", err.message);
+    }
+
+    /* ========================= FIRESTORE WRITE ========================= */
+    try {
+      const admin = await import("../config/firebase.config.js");
+      await admin.default.firestore()
+        .collection("alerts")
+        .doc(repoIdStr)
+        .set({
+          alerts,
+          vulnerabilities: formattedVulns,
+          riskScore: risk,
+          version: newVersion,
+          updatedAt: new Date()
+        });
+      console.log("🔥 Firestore updated");
+    } catch (err) {
+      console.log("❌ Firestore write failed:", err.message);
+    }
+
+    /* ========================= SCAN HISTORY ========================= */
     await ScanHistory.create({
       repoId: repoIdStr,
       version: newVersion,
@@ -246,7 +271,7 @@ export const analyzeRepo = async (req, res) => {
       vulnerabilityCount: formattedVulns.length
     }).catch(() => {});
 
-    /* ========================= UPDATE ========================= */
+    /* ========================= UPDATE REPO ========================= */
     const updatedRepo = await Repo.findByIdAndUpdate(
       repoId,
       {

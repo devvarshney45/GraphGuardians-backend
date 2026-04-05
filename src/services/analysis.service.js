@@ -3,6 +3,7 @@ import Vulnerability from "../models/vulnerability.model.js";
 import Alert from "../models/alert.model.js";
 import Repo from "../models/repo.model.js";
 import ScanHistory from "../models/scanHistory.model.js";
+import User from "../models/user.model.js"; // 🔥 ADD
 
 import { fetchPackageJson } from "./github.service.js";
 import { extractDependencies } from "../utils/parser.util.js";
@@ -14,6 +15,8 @@ import { getDependencyTree } from "./dependencyTree.service.js";
 import { extractDependencyEdges } from "../utils/treeParser.util.js";
 
 import { pushToTigerGraph } from "./tigergraph.service.js";
+import { sendNotification, writeToFirestore } from "./firebase.service.js"; // 🔥 ADD
+
 import {
   compareDependencies,
   findNewVulnerabilities,
@@ -148,13 +151,13 @@ export const runAnalysis = async (url, repoId, token) => {
     ========================= */
     let aiInsights = [];
     try {
-      aiInsights = await generateAIInsights(formattedVulns);
+      aiInsights = await generateAIInsights(formattedVulns.slice(0, 5));
     } catch (err) {
       console.log("⚠️ AI failed:", err.message);
     }
 
     /* =========================
-       🌳 DEPENDENCY TREE (CHAIN GRAPH)
+       🌳 DEPENDENCY TREE
     ========================= */
     let depEdges = [];
 
@@ -174,28 +177,59 @@ export const runAnalysis = async (url, repoId, token) => {
     console.log(`🔗 Dependency edges: ${depEdges.length}`);
 
     /* =========================
-       🧠 NEO4J GRAPH PUSH
+       🧠 TIGERGRAPH ONLY (FIXED)
     ========================= */
-    // REMOVE:
-try {
-  await pushToNeo4j(repoId, uniqueDeps, formattedVulns, depEdges);
-  console.log("🧠 Neo4j Sync Done ✅");
-} catch (err) {
-  console.log("⚠️ Neo4j error:", err.message);
-}
+    try {
+      await pushToTigerGraph(
+        repoId,
+        uniqueDeps.map(d => ({ name: d.name, version: d.version })),
+        formattedVulns,
+        depEdges
+      );
+      console.log("🧠 TigerGraph Sync Done ✅");
+    } catch (err) {
+      console.log("⚠️ TigerGraph error:", err.message);
+    }
 
-// ADD:
-try {
-  await pushToTigerGraph(
-    repoId,
-    uniqueDeps.map(d => ({ name: d.name, version: d.version })),
-    formattedVulns,
-    depEdges
-  );
-  console.log("🧠 TigerGraph Sync Done ✅");
-} catch (err) {
-  console.log("⚠️ TigerGraph error:", err.message);
-}
+    /* =========================
+       🔔 PUSH NOTIFICATION
+    ========================= */
+    try {
+      const user = await User.findById(repo.userId);
+
+      console.log("📊 Alerts:", alerts.length);
+      console.log("👤 User token:", user?.fcmToken);
+
+      if (user?.fcmToken && alerts.length > 0) {
+        await sendNotification(
+          user.fcmToken,
+          "🚨 Security Alert",
+          `${alerts.length} new vulnerabilities detected`,
+          { repoId: String(repoId) }
+        );
+
+        console.log("📲 Notifications sent");
+      }
+    } catch (err) {
+      console.log("❌ Notification error:", err.message);
+    }
+
+    /* =========================
+       🔥 FIRESTORE REALTIME
+    ========================= */
+    try {
+      await writeToFirestore({
+        repoId: String(repoId),
+        alerts,
+        vulnerabilities: formattedVulns,
+        riskScore: risk,
+        version: newVersion
+      });
+
+      console.log("🔥 Firestore updated");
+    } catch (err) {
+      console.log("❌ Firestore error:", err.message);
+    }
 
     /* =========================
        📊 SCAN HISTORY

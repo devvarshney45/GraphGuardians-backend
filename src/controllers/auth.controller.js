@@ -3,6 +3,9 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import axios from "axios";
 
+const FRONTEND = process.env.FRONTEND_URL || "http://localhost:5173";
+const APP_SLUG  = process.env.GITHUB_APP_SLUG || "GraphGuardians";
+
 /* =========================
    🔐 JWT GENERATOR
 ========================= */
@@ -15,42 +18,59 @@ const generateToken = (userId) => {
 };
 
 /* =========================
+   🔑 GET INSTALLATION TOKEN
+   (GitHub App → Installation access token)
+========================= */
+const getInstallationToken = async (installationId) => {
+  const appId      = process.env.GITHUB_APP_ID;
+  const privateKey = process.env.GITHUB_PRIVATE_KEY?.replace(/\\n/g, "\n");
+
+  if (!appId || !privateKey) {
+    throw new Error("GITHUB_APP_ID or GITHUB_PRIVATE_KEY missing");
+  }
+
+  // JWT for GitHub App auth
+  const now = Math.floor(Date.now() / 1000);
+  const payload = { iat: now - 60, exp: now + 600, iss: appId };
+
+  const appJwt = jwt.sign(payload, privateKey, { algorithm: "RS256" });
+
+  const res = await axios.post(
+    `https://api.github.com/app/installations/${installationId}/access_tokens`,
+    {},
+    {
+      headers: {
+        Authorization: `Bearer ${appJwt}`,
+        Accept: "application/vnd.github+json",
+      },
+    }
+  );
+
+  return res.data.token;
+};
+
+/* =========================
    🔐 REGISTER
 ========================= */
 export const register = async (req, res) => {
   try {
     const { name, email, password } = req.body;
 
-    if (!name || !email || !password) {
+    if (!name || !email || !password)
       return res.status(400).json({ msg: "All fields are required" });
-    }
 
-    if (password.length < 6) {
-      return res.status(400).json({
-        msg: "Password must be at least 6 characters"
-      });
-    }
+    if (password.length < 6)
+      return res.status(400).json({ msg: "Password must be at least 6 characters" });
 
     const existing = await User.findOne({ email });
-    if (existing) {
+    if (existing)
       return res.status(400).json({ msg: "Email already exists" });
-    }
 
     const hashed = await bcrypt.hash(password, 10);
+    const user   = await User.create({ name, email, password: hashed });
+    const token  = generateToken(user._id);
 
-    const user = await User.create({
-      name,
-      email,
-      password: hashed
-    });
-
-    const token = generateToken(user._id);
-
-    res.status(201).json({
-      msg: "User registered successfully",
-      token,
-      user: user.toSafeObject()
-    });
+    res.status(201).json({ msg: "User registered successfully", token, user: user.toSafeObject() });
 
   } catch (err) {
     console.log("❌ REGISTER ERROR:", err.message);
@@ -65,35 +85,21 @@ export const login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({
-        msg: "Email and password required"
-      });
-    }
+    if (!email || !password)
+      return res.status(400).json({ msg: "Email and password required" });
 
     const user = await User.findOne({ email }).select("+password");
 
-    if (!user || !user.password) {
-      return res.status(401).json({
-        msg: "Invalid credentials"
-      });
-    }
+    if (!user || !user.password)
+      return res.status(401).json({ msg: "Invalid credentials" });
 
     const match = await bcrypt.compare(password, user.password);
-
-    if (!match) {
-      return res.status(401).json({
-        msg: "Invalid credentials"
-      });
-    }
+    if (!match)
+      return res.status(401).json({ msg: "Invalid credentials" });
 
     const token = generateToken(user._id);
 
-    res.json({
-      msg: "Login successful",
-      token,
-      user: user.toSafeObject()
-    });
+    res.json({ msg: "Login successful", token, user: user.toSafeObject() });
 
   } catch (err) {
     console.log("❌ LOGIN ERROR:", err.message);
@@ -102,207 +108,215 @@ export const login = async (req, res) => {
 };
 
 /* =========================
-   🔗 GITHUB OAUTH LOGIN
+   🔗 GITHUB OAUTH — STEP 1
+   Redirect to GitHub login
 ========================= */
-
-// STEP 1 → redirect
 export const githubLogin = (req, res) => {
   console.log("🚀 GitHub OAuth started");
 
+  // state = "web" | "app"  (mobile app sends state=app)
   const state = req.query.state || "web";
-const redirectUrl =
-  `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&scope=repo&state=${state}&prompt=select_account`;
 
-  res.redirect(redirectUrl);
+  const url =
+    `https://github.com/login/oauth/authorize` +
+    `?client_id=${process.env.GITHUB_CLIENT_ID}` +
+    `&scope=repo,read:org,read:user` +
+    `&state=${state}` +
+    `&prompt=select_account`;
+
+  res.redirect(url);
 };
 
-// STEP 2 → callback
+/* =========================
+   🔗 GITHUB OAUTH — STEP 2
+   Callback after GitHub login
+========================= */
 export const githubCallback = async (req, res) => {
   try {
     console.log("📥 GitHub Callback HIT");
 
     const { code, state } = req.query;
+    const isMobileApp = state === "app";
 
     if (!code) {
-      return res.redirect(`${process.env.FRONTEND_URL}/error`);
+      return isMobileApp
+        ? res.redirect(`myapp://auth?error=no_code`)
+        : res.redirect(`${FRONTEND}/login?error=no_code`);
     }
 
-    /* =========================
-       🔑 GET ACCESS TOKEN
-    ========================= */
+    /* ── Exchange code for access token ── */
     const tokenRes = await axios.post(
       "https://github.com/login/oauth/access_token",
       {
-        client_id: process.env.GITHUB_CLIENT_ID,
+        client_id:     process.env.GITHUB_CLIENT_ID,
         client_secret: process.env.GITHUB_CLIENT_SECRET,
-        code
+        code,
       },
-      {
-        headers: { Accept: "application/json" }
-      }
+      { headers: { Accept: "application/json" } }
     );
 
     const accessToken = tokenRes.data.access_token;
 
     if (!accessToken) {
-      return res.redirect(`${process.env.FRONTEND_URL}/error`);
+      return isMobileApp
+        ? res.redirect(`myapp://auth?error=token_failed`)
+        : res.redirect(`${FRONTEND}/login?error=token_failed`);
     }
 
-    /* =========================
-       👤 GET USER DATA
-    ========================= */
-    const userRes = await axios.get("https://api.github.com/user", {
-      headers: {
-        Authorization: `token ${accessToken}`
-      }
+    /* ── Get GitHub user info ── */
+    const githubRes  = await axios.get("https://api.github.com/user", {
+      headers: { Authorization: `token ${accessToken}` },
     });
+    const githubUser = githubRes.data;
 
-    const githubUser = userRes.data;
-    const githubUsername = githubUser.login.toLowerCase();
+    /* ── Find or create user ── */
+    let user = await User.findOne({ githubId: githubUser.id });
 
-    let user = null;
-
-    if (githubUser.email) {
+    if (!user && githubUser.email) {
       user = await User.findOne({ email: githubUser.email });
     }
 
     if (!user) {
-      user = await User.findOne({ githubId: githubUser.id });
-    }
-
-    /* =========================
-       🆕 CREATE USER
-    ========================= */
-    if (!user) {
       user = await User.create({
-        name: githubUser.name || githubUser.login,
-        email: githubUser.email || `${githubUser.id}@github.com`,
-        githubId: githubUser.id,
-        githubUsername,
+        name:              githubUser.name || githubUser.login,
+        email:             githubUser.email || `${githubUser.id}@github.com`,
+        githubId:          githubUser.id,
+        githubUsername:    githubUser.login.toLowerCase(),
         githubAccessToken: accessToken,
-        avatar: githubUser.avatar_url
+        avatar:            githubUser.avatar_url,
       });
-    }
-
-    /* =========================
-       🔄 UPDATE USER
-    ========================= */
-    else {
-      user.githubId = githubUser.id;
+    } else {
+      user.githubId          = githubUser.id;
       user.githubAccessToken = accessToken;
-      user.githubUsername = githubUsername;
-      user.avatar = githubUser.avatar_url;
-
+      user.githubUsername    = githubUser.login.toLowerCase();
+      user.avatar            = githubUser.avatar_url;
       await user.save();
     }
 
-    /* =========================
-       🔐 GENERATE TOKEN
-    ========================= */
     const token = generateToken(user._id);
 
-    const FRONTEND = process.env.FRONTEND_URL || "http://localhost:5173";
+    /* ════════════════════════════════════════
+       🔍 CHECK GITHUB APP INSTALLATION
+       Method 1: DB mein installationId saved hai?
+       Method 2: GitHub API se live check
+    ════════════════════════════════════════ */
 
-    /* =========================
-       🔥 INSTALLATION CHECK (MAIN LOGIC)
-    ========================= */
-    if (!user.installationId) {
-      console.log("⚠️ GitHub App NOT installed");
+    let isInstalled = false;
 
-      const installUrl =
-        `https://github.com/apps/GraphGuardians/installations/new` +
-        `?redirect_uri=${FRONTEND}/dashboard`;
-
-      console.log("➡️ Redirecting to install:", installUrl);
-
-      return res.redirect(
-        `${FRONTEND}/install?` +
-        `url=${encodeURIComponent(installUrl)}&token=${token}`
-      );
+    // Method 1: DB check
+    if (user.installationId) {
+      try {
+        await getInstallationToken(user.installationId);
+        isInstalled = true;
+        console.log("✅ Installation valid (from DB):", user.installationId);
+      } catch (err) {
+        console.log("⚠️ Saved installationId invalid, resetting...");
+        user.installationId = null;
+        await user.save();
+      }
     }
 
-    /* =========================
-       🔥 VERIFY INSTALLATION (PRO FIX)
-    ========================= */
-    try {
-      await getInstallationToken(user.installationId);
-      console.log("✅ Installation valid");
-    } catch (err) {
-      console.log("❌ Installation invalid → resetting");
+    // Method 2: Live API check (agar DB mein nahi tha)
+    if (!isInstalled) {
+      try {
+        const installRes = await axios.get(
+          "https://api.github.com/user/installations",
+          {
+            headers: {
+              Authorization: `token ${accessToken}`,
+              Accept: "application/vnd.github+json",
+            },
+          }
+        );
 
-      user.installationId = null;
-      await user.save();
+        const installations = installRes.data?.installations || [];
+        const found = installations.find(i => i.app_slug === APP_SLUG);
 
-      const installUrl =
-        `https://github.com/apps/GraphGuardians/installations/new` +
-        `?redirect_uri=${FRONTEND}/dashboard`;
-
-      return res.redirect(
-        `${FRONTEND}/install?` +
-        `url=${encodeURIComponent(installUrl)}&token=${token}`
-      );
+        if (found) {
+          isInstalled = true;
+          // Save to DB for future use
+          user.installationId = found.id;
+          await user.save();
+          console.log("✅ Installation found via API:", found.id);
+        }
+      } catch (err) {
+        console.log("⚠️ Could not check installations:", err.message);
+      }
     }
 
-    /* =========================
-       🚀 NORMAL REDIRECT (ALL GOOD)
-    ========================= */
-    let redirectUrl = "";
+    /* ════════════════════════════════════════
+       🚀 REDIRECT BASED ON INSTALLATION STATUS
+    ════════════════════════════════════════ */
 
-    if (state === "app") {
-      redirectUrl = `myapp://auth?token=${token}`;
+    if (isInstalled) {
+      // ✅ App installed → go to dashboard
+      console.log("✅ App installed → Dashboard");
+
+      if (isMobileApp) {
+        return res.redirect(`myapp://auth?token=${token}`);
+      }
+      return res.redirect(`${FRONTEND}/auth/success?token=${token}`);
+
     } else {
-      redirectUrl = `${FRONTEND}/auth/success?token=${token}`;
+      // ❌ App not installed → install page
+      console.log("⚠️ App NOT installed → Install page");
+
+      const installUrl =
+        `https://github.com/apps/${APP_SLUG}/installations/new` +
+        `?state=${token}`;  // state mein token pass karo
+
+      if (isMobileApp) {
+        // Mobile: deep link se install page open
+        return res.redirect(
+          `myapp://install?url=${encodeURIComponent(installUrl)}&token=${token}`
+        );
+      }
+
+      // Web: install page pe redirect
+      return res.redirect(
+        `${FRONTEND}/install?url=${encodeURIComponent(installUrl)}&token=${token}`
+      );
     }
-
-    console.log("🚀 Redirecting to dashboard:", redirectUrl);
-
-    return res.redirect(redirectUrl);
 
   } catch (err) {
     console.log("❌ GitHub OAuth Error:", err.message);
-
-    const FRONTEND = process.env.FRONTEND_URL || "http://localhost:5173";
-
-    return res.redirect(`${FRONTEND}/error`);
+    return res.redirect(`${FRONTEND}/login?error=oauth_failed`);
   }
 };
 
 /* =========================
-   🔔 SAVE DEVICE TOKEN
+   🔗 GITHUB APP INSTALL CALLBACK
+   GitHub app install hone ke baad yahan aata hai
 ========================= */
-export const saveDeviceToken = async (req, res) => {
+export const githubInstallCallback = async (req, res) => {
   try {
-    const { token } = req.body;
+    console.log("📥 Install Callback HIT", req.query);
 
-    if (!token) {
-      return res.status(400).json({
-        msg: "Device token required"
-      });
+    const { installation_id, setup_action, state } = req.query;
+
+    // state mein JWT token pass kiya tha
+    const token = state;
+
+    if (setup_action === "install" && installation_id && token) {
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        if (decoded?.id) {
+          await User.findByIdAndUpdate(decoded.id, {
+            installationId: installation_id,
+          });
+          console.log("✅ installationId saved:", installation_id);
+        }
+      } catch (err) {
+        console.log("⚠️ Token verify failed in install callback:", err.message);
+      }
     }
 
-    const user = await User.findById(req.user.id);
-
-    if (!user) {
-      return res.status(404).json({
-        msg: "User not found"
-      });
-    }
-
-    if (!user.fcmTokens) {
-      user.fcmTokens = [];
-    }
-
-    if (!user.fcmTokens.includes(token)) {
-      user.fcmTokens.push(token);
-      await user.save();
-    }
-
-    res.json({
-      msg: "Device token saved successfully"
-    });
+    // After install → dashboard
+    return res.redirect(`${FRONTEND}/auth/success?token=${token}&installed=true`);
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.log("❌ Install callback error:", err.message);
+    return res.redirect(`${FRONTEND}/dashboard`);
   }
 };
 
@@ -312,17 +326,8 @@ export const saveDeviceToken = async (req, res) => {
 export const getProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
-
-    if (!user) {
-      return res.status(404).json({
-        msg: "User not found"
-      });
-    }
-
-    res.json({
-      user: user.toSafeObject()
-    });
-
+    if (!user) return res.status(404).json({ msg: "User not found" });
+    res.json({ user: user.toSafeObject() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -334,15 +339,32 @@ export const getProfile = async (req, res) => {
 export const getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ msg: "User not found" });
+    return res.json({ user: user.toSafeObject() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
 
-    if (!user) {
-      return res.status(404).json({ msg: "User not found" });
+/* =========================
+   🔔 SAVE DEVICE TOKEN
+========================= */
+export const saveDeviceToken = async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ msg: "Device token required" });
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ msg: "User not found" });
+
+    if (!user.fcmTokens) user.fcmTokens = [];
+
+    if (!user.fcmTokens.includes(token)) {
+      user.fcmTokens.push(token);
+      await user.save();
     }
 
-    return res.json({
-      user: user.toSafeObject()
-    });
-
+    res.json({ msg: "Device token saved successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

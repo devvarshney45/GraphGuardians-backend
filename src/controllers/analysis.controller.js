@@ -1,4 +1,3 @@
-
 import Repo from "../models/repo.model.js";
 import Dependency from "../models/dependency.model.js";
 import Vulnerability from "../models/vulnerability.model.js";

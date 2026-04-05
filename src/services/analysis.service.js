@@ -3,7 +3,6 @@ import Vulnerability from "../models/vulnerability.model.js";
 import Alert from "../models/alert.model.js";
 import Repo from "../models/repo.model.js";
 import ScanHistory from "../models/scanHistory.model.js";
-import User from "../models/user.model.js";
 
 import { fetchPackageJson } from "./github.service.js";
 import { extractDependencies } from "../utils/parser.util.js";
@@ -15,8 +14,6 @@ import { getDependencyTree } from "./dependencyTree.service.js";
 import { extractDependencyEdges } from "../utils/treeParser.util.js";
 
 import { pushToTigerGraph } from "./tigergraph.service.js";
-import { sendNotification, writeToFirestore } from "./firebase.service.js";
-
 import {
   compareDependencies,
   findNewVulnerabilities,
@@ -27,17 +24,6 @@ import {
 export const runAnalysis = async (url, repoId, token) => {
   try {
     console.log("\n🚀 ===============================");
-
-    /* =========================
-       🔐 VALIDATE TOKEN (🔥 FIX)
-    ========================= */
-    if (!token) {
-      console.log("❌ Missing GitHub token");
-      return;
-    }
-
-    console.log("🔑 Token present:", !!token);
-    console.log("🌐 Repo URL:", url);
 
     /* =========================
        🔐 GET REPO
@@ -63,34 +49,21 @@ export const runAnalysis = async (url, repoId, token) => {
       : [];
 
     /* =========================
-       📥 FETCH package.json (🔥 FIX SAFE)
+       📥 FETCH package.json
     ========================= */
-    let pkg;
-
-    try {
-      pkg = await fetchPackageJson(url, token);
-      console.log("📥 package.json fetched");
-    } catch (err) {
-      console.log("❌ package.json fetch failed:", err.message);
-
-      await Repo.findByIdAndUpdate(repoId, {
-        status: "scanned",
-        riskScore: 0
-      });
-
-      return;
-    }
+    const pkg = await fetchPackageJson(url, token);
+    console.log("📥 package.json fetched");
 
     /* =========================
        📦 EXTRACT DEPENDENCIES
     ========================= */
-    const rawDeps = extractDependencies(pkg) || [];
+    const rawDeps = extractDependencies(pkg);
 
     const seen = new Set();
     const uniqueDeps = [];
 
     for (const d of rawDeps) {
-      if (!d?.name) continue;
+      if (!d.name) continue;
 
       const name = d.name.toLowerCase().trim();
       const key = `${name}_${newVersion}`;
@@ -124,39 +97,33 @@ export const runAnalysis = async (url, repoId, token) => {
        💾 SAVE DEPENDENCIES
     ========================= */
     if (uniqueDeps.length > 0) {
-      await Dependency.insertMany(uniqueDeps, { ordered: false }).catch(() => {});
+      await Dependency.insertMany(uniqueDeps, { ordered: false });
     }
 
     /* =========================
-       🚨 VULNERABILITIES (🔥 SAFE)
+       🚨 VULNERABILITIES
     ========================= */
-    let vulns = [];
+    const vulns = await checkVulnerabilities(uniqueDeps);
 
-    try {
-      vulns = await checkVulnerabilities(uniqueDeps);
-    } catch (err) {
-      console.log("❌ Vulnerability check failed:", err.message);
-    }
-
-    const formattedVulns = (vulns || []).map(v => ({
+    const formattedVulns = vulns.map(v => ({
       repoId,
       versionGroup: newVersion,
-      package: v.package?.toLowerCase()?.trim(),
+      package: v.package?.toLowerCase().trim(),
       version: v.version,
-      severity: v.severity || "LOW",
+      severity: v.severity || "unknown",
       description: v.description,
       cve: v.cve,
       fix: v.fix
     }));
 
     if (formattedVulns.length > 0) {
-      await Vulnerability.insertMany(formattedVulns, { ordered: false }).catch(() => {});
+      await Vulnerability.insertMany(formattedVulns, { ordered: false });
     }
 
     console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
 
     /* =========================
-       🔔 ALERTS
+       🔔 ALERTS (SMART)
     ========================= */
     const newVulns = findNewVulnerabilities(oldVulns, formattedVulns);
     const fixedVulns = findFixedVulnerabilities(oldVulns, formattedVulns);
@@ -164,7 +131,7 @@ export const runAnalysis = async (url, repoId, token) => {
     const alerts = generateAlerts(repoId, newVulns, fixedVulns);
 
     if (alerts.length > 0) {
-      await Alert.insertMany(alerts).catch(() => {});
+      await Alert.insertMany(alerts);
       console.log(`🔔 Alerts generated: ${alerts.length}`);
     } else {
       console.log("✅ No new alerts");
@@ -181,13 +148,13 @@ export const runAnalysis = async (url, repoId, token) => {
     ========================= */
     let aiInsights = [];
     try {
-      aiInsights = await generateAIInsights(formattedVulns.slice(0, 5));
+      aiInsights = await generateAIInsights(formattedVulns);
     } catch (err) {
       console.log("⚠️ AI failed:", err.message);
     }
 
     /* =========================
-       🌳 DEPENDENCY TREE (🔥 SAFE)
+       🌳 DEPENDENCY TREE (CHAIN GRAPH)
     ========================= */
     let depEdges = [];
 
@@ -197,7 +164,7 @@ export const runAnalysis = async (url, repoId, token) => {
       const tree = await getDependencyTree(url, token);
 
       if (tree) {
-        depEdges = extractDependencyEdges(tree) || [];
+        depEdges = extractDependencyEdges(tree);
       }
 
     } catch (err) {
@@ -207,56 +174,28 @@ export const runAnalysis = async (url, repoId, token) => {
     console.log(`🔗 Dependency edges: ${depEdges.length}`);
 
     /* =========================
-       🧠 TIGERGRAPH
+       🧠 NEO4J GRAPH PUSH
     ========================= */
-    try {
-      await pushToTigerGraph(
-        repoId,
-        uniqueDeps.map(d => ({ name: d.name, version: d.version })),
-        formattedVulns,
-        depEdges
-      );
-      console.log("🧠 TigerGraph Sync Done ✅");
-    } catch (err) {
-      console.log("⚠️ TigerGraph error:", err.message);
-    }
+    // REMOVE:
+try {
+  await pushToNeo4j(repoId, uniqueDeps, formattedVulns, depEdges);
+  console.log("🧠 Neo4j Sync Done ✅");
+} catch (err) {
+  console.log("⚠️ Neo4j error:", err.message);
+}
 
-    /* =========================
-       🔔 PUSH NOTIFICATION
-    ========================= */
-    try {
-      const user = await User.findById(repo.userId);
-
-      if (user?.fcmToken && alerts.length > 0) {
-        await sendNotification(
-          user.fcmToken,
-          "🚨 Security Alert",
-          `${alerts.length} new vulnerabilities detected`,
-          { repoId: String(repoId) }
-        );
-
-        console.log("📲 Notifications sent");
-      }
-    } catch (err) {
-      console.log("❌ Notification error:", err.message);
-    }
-
-    /* =========================
-       🔥 FIRESTORE
-    ========================= */
-    try {
-      await writeToFirestore({
-        repoId: String(repoId),
-        alerts,
-        vulnerabilities: formattedVulns,
-        riskScore: risk,
-        version: newVersion
-      });
-
-      console.log("🔥 Firestore updated");
-    } catch (err) {
-      console.log("❌ Firestore error:", err.message);
-    }
+// ADD:
+try {
+  await pushToTigerGraph(
+    repoId,
+    uniqueDeps.map(d => ({ name: d.name, version: d.version })),
+    formattedVulns,
+    depEdges
+  );
+  console.log("🧠 TigerGraph Sync Done ✅");
+} catch (err) {
+  console.log("⚠️ TigerGraph error:", err.message);
+}
 
     /* =========================
        📊 SCAN HISTORY
@@ -267,7 +206,7 @@ export const runAnalysis = async (url, repoId, token) => {
       riskScore: risk,
       dependencyCount: uniqueDeps.length,
       vulnerabilityCount: formattedVulns.length
-    }).catch(() => {});
+    });
 
     /* =========================
        🔄 UPDATE REPO
@@ -284,6 +223,9 @@ export const runAnalysis = async (url, repoId, token) => {
     console.log("📊 Scan Completed ✅");
     console.log("==================================\n");
 
+    /* =========================
+       📦 RETURN
+    ========================= */
     return {
       version: newVersion,
       dependencies: uniqueDeps,

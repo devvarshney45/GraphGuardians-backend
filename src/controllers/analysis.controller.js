@@ -13,7 +13,7 @@ import { calculateRisk } from "../utils/risk.util.js";
 
 import { pushToTigerGraph } from "../services/tigergraph.service.js";
 import { generateAIInsights } from "../services/ai.service.js";
-import { sendNotification } from "../services/firebase.service.js";
+import { sendNotification, writeToFirestore } from "../services/firebase.service.js";
 
 import {
   findNewVulnerabilities,
@@ -79,10 +79,7 @@ export const analyzeRepo = async (req, res) => {
 
       emitResult(req, repoIdStr, updatedRepo, 0, 0, 0, []);
 
-      return response.json({
-        success: true,
-        repo: updatedRepo
-      });
+      return response.json({ success: true, repo: updatedRepo });
     }
 
     /* ========================= TREE ========================= */
@@ -94,9 +91,7 @@ export const analyzeRepo = async (req, res) => {
         tree = buildTreeFromLockfile(lockfile);
       } else {
         console.log("⚠️ FALLBACK MODE");
-
         const deps = pkg.dependencies || {};
-
         tree = Object.entries(deps).map(([name, version]) => ({
           name,
           version: version || "latest",
@@ -108,7 +103,6 @@ export const analyzeRepo = async (req, res) => {
     }
 
     console.log("🌳 TREE SIZE:", tree.length);
-    console.log("🌳 TREE SAMPLE:", tree.slice(0, 5));
 
     /* ========================= UNIQUE DEPS ========================= */
     const seen = new Set();
@@ -130,7 +124,6 @@ export const analyzeRepo = async (req, res) => {
       }));
 
     console.log(`📦 Dependencies Saved: ${uniqueDeps.length}`);
-    console.log("📦 SAMPLE DEP:", uniqueDeps[0]);
 
     await Dependency.insertMany(uniqueDeps, { ordered: false }).catch(() => {});
 
@@ -178,9 +171,7 @@ export const analyzeRepo = async (req, res) => {
 
     try {
       console.log("🧠 AI START");
-
       aiInsights = await generateAIInsights(formattedVulns.slice(0, 50));
-
       console.log("✅ AI DONE");
     } catch (err) {
       console.log("⚠️ AI FAILED:", err.message);
@@ -196,7 +187,6 @@ export const analyzeRepo = async (req, res) => {
       }));
 
     console.log("🔗 DEP EDGES COUNT:", depEdges.length);
-    console.log("🔗 DEP EDGES SAMPLE:", depEdges.slice(0, 5));
 
     if (depEdges.length === 0) {
       console.log("❌ NO DEPENDENCY CHAIN FOUND → TigerGraph will be EMPTY");
@@ -206,10 +196,7 @@ export const analyzeRepo = async (req, res) => {
 
     await pushToTigerGraph(
       repoIdStr,
-      uniqueDeps.map(d => ({
-        name: d.name,
-        version: d.version
-      })),
+      uniqueDeps.map(d => ({ name: d.name, version: d.version })),
       formattedVulns.map(v => ({
         package: v.package,
         cve: v.cve,
@@ -225,7 +212,7 @@ export const analyzeRepo = async (req, res) => {
     const risk = calculateRisk(formattedVulns);
     console.log(`⚠️ Risk Score: ${risk}`);
 
-    /* ========================= PUSH NOTIFICATION (FCM) ========================= */
+    /* ========================= FCM NOTIFICATION ========================= */
     try {
       const user = await User.findById(repo.userId);
 
@@ -238,29 +225,20 @@ export const analyzeRepo = async (req, res) => {
         );
         console.log("📲 FCM Notification sent");
       } else {
-        console.log("📲 FCM skipped — no token or no alerts");
+        console.log(`📲 FCM skipped — token: ${!!user?.fcmToken}, alerts: ${alerts.length}`);
       }
     } catch (err) {
       console.log("❌ Push failed:", err.message);
     }
 
     /* ========================= FIRESTORE WRITE ========================= */
-    try {
-      const admin = await import("../config/firebase.config.js");
-      await admin.default.firestore()
-        .collection("alerts")
-        .doc(repoIdStr)
-        .set({
-          alerts,
-          vulnerabilities: formattedVulns,
-          riskScore: risk,
-          version: newVersion,
-          updatedAt: new Date()
-        });
-      console.log("🔥 Firestore updated");
-    } catch (err) {
-      console.log("❌ Firestore write failed:", err.message);
-    }
+    await writeToFirestore({
+      repoId: repoIdStr,
+      alerts,
+      vulnerabilities: formattedVulns,
+      riskScore: risk,
+      version: newVersion
+    });
 
     /* ========================= SCAN HISTORY ========================= */
     await ScanHistory.create({

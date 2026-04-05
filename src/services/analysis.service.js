@@ -23,7 +23,7 @@ import {
   findFixedVulnerabilities,
   generateAlerts
 } from "../utils/diff.util.js";
-
+import { sendNotification, writeToFirestore } from "./firebase.service.js";
 export const runAnalysis = async (url, repoId, token) => {
   try {
     console.log("\n🚀 ===============================");
@@ -214,23 +214,13 @@ export const runAnalysis = async (url, repoId, token) => {
     /* =========================
        🔥 FIRESTORE WRITE
     ========================= */
-    try {
-      const admin = await import("../config/firebase.config.js");
-      await admin.default.firestore()
-        .collection("alerts")
-        .doc(repoIdStr)
-        .set({
-          alerts,
-          vulnerabilities: formattedVulns,
-          riskScore: risk,
-          version: newVersion,
-          updatedAt: new Date()
-        });
-      console.log("🔥 Firestore updated");
-    } catch (err) {
-      console.log("❌ Firestore write failed:", err.message);
-    }
-
+    await writeToFirestore({
+  repoId: repoIdStr,
+  alerts,
+  vulnerabilities: formattedVulns,
+  riskScore: risk,
+  version: newVersion
+});
     /* =========================
        📊 SCAN HISTORY
     ========================= */

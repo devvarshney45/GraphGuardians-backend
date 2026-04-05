@@ -26,6 +26,11 @@ import {
   generateAlerts
 } from "../utils/diff.util.js";
 
+/* ✅ FIRESTORE CLEANER (VERY IMPORTANT) */
+const cleanForFirestore = (obj) => {
+  return JSON.parse(JSON.stringify(obj));
+};
+
 export const runAnalysis = async (url, repoId, token) => {
   try {
     console.log("\n🚀 ===============================");
@@ -91,9 +96,9 @@ export const runAnalysis = async (url, repoId, token) => {
     const vulns = await checkVulnerabilities(uniqueDeps);
 
     const formattedVulns = vulns.map(v => ({
-      repoId,
+      repoId: repoIdStr, // ✅ ALWAYS STRING
       versionGroup: newVersion,
-      package: v.package?.toLowerCase().trim(),
+      package: v.package?.toLowerCase()?.trim(),
       version: v.version,
       severity: v.severity || "unknown",
       description: v.description,
@@ -110,7 +115,7 @@ export const runAnalysis = async (url, repoId, token) => {
     const newVulns = findNewVulnerabilities(oldVulns, formattedVulns);
     const fixedVulns = findFixedVulnerabilities(oldVulns, formattedVulns);
 
-    const alerts = generateAlerts(repoId, newVulns, fixedVulns);
+    const alerts = generateAlerts(repoIdStr, newVulns, fixedVulns);
 
     if (alerts.length > 0) {
       await Alert.insertMany(alerts);
@@ -156,10 +161,9 @@ export const runAnalysis = async (url, repoId, token) => {
       console.log("⚠️ TigerGraph error:", err.message);
     }
 
-    /* ✅ FIXED FCM */
+    /* ✅ FCM FIXED */
     try {
       const user = await User.findById(repo.userId);
-
       const tokens = user?.fcmTokens || [];
 
       if (tokens.length > 0 && alerts.length > 0) {
@@ -175,22 +179,24 @@ export const runAnalysis = async (url, repoId, token) => {
       console.log("❌ Notification error:", err.message);
     }
 
-    /* ✅ FIRESTORE FIXED */
+    /* ✅ FIRESTORE FINAL FIX */
     try {
-      await writeToFirestore({
-        repoId: repoIdStr,
-        alerts,
-        vulnerabilities: formattedVulns,
-        riskScore: risk,
-        version: newVersion
-      });
+      await writeToFirestore(
+        cleanForFirestore({
+          repoId: repoIdStr,
+          alerts,
+          vulnerabilities: formattedVulns,
+          riskScore: risk,
+          version: newVersion
+        })
+      );
       console.log("🔥 Firestore updated");
     } catch (err) {
       console.log("❌ Firestore write failed:", err.message);
     }
 
     await ScanHistory.create({
-      repoId,
+      repoId: repoIdStr,
       version: newVersion,
       riskScore: risk,
       dependencyCount: uniqueDeps.length,

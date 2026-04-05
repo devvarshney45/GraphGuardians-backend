@@ -30,7 +30,7 @@ if (!admin.apps.length) {
 }
 
 /* =========================
-   🔔 SEND NOTIFICATION (FINAL)
+   🔔 SEND NOTIFICATION
 ========================= */
 export const sendNotification = async (
   tokens = [],
@@ -39,12 +39,11 @@ export const sendNotification = async (
   extraData = {}
 ) => {
   try {
-    if (!tokens || tokens.length === 0) {
+    if (!tokens || (Array.isArray(tokens) && tokens.length === 0)) {
       console.log("⚠️ No FCM tokens");
-      return;
+      return { success: false };
     }
 
-    // 🔥 Ensure array
     const tokenList = Array.isArray(tokens) ? tokens : [tokens];
 
     const message = {
@@ -88,7 +87,7 @@ export const sendNotification = async (
     console.log(`❌ Failed: ${response.failureCount}`);
 
     /* =========================
-       🔥 HANDLE FAILED TOKENS
+       🔥 HANDLE INVALID TOKENS
     ========================= */
     if (response.failureCount > 0) {
       const invalidTokens = [];
@@ -97,7 +96,6 @@ export const sendNotification = async (
         if (!res.success) {
           const errCode = res.error?.code;
 
-          // 🔥 detect invalid tokens
           if (
             errCode === "messaging/invalid-registration-token" ||
             errCode === "messaging/registration-token-not-registered"
@@ -108,9 +106,9 @@ export const sendNotification = async (
       });
 
       if (invalidTokens.length) {
-        console.log("⚠️ Remove invalid tokens:", invalidTokens);
+        console.log("⚠️ Invalid tokens:", invalidTokens);
 
-        // 👉 OPTIONAL: remove from DB (recommended)
+        // 👉 OPTIONAL cleanup (recommended)
         // await User.updateMany(
         //   { fcmToken: { $in: invalidTokens } },
         //   { $unset: { fcmToken: "" } }
@@ -131,5 +129,44 @@ export const sendNotification = async (
       success: false,
       error: err.message
     };
+  }
+};
+
+/* =========================
+   🔥 FIRESTORE REALTIME UPDATE
+========================= */
+export const writeToFirestore = async ({
+  repoId,
+  alerts = [],
+  vulnerabilities = [],
+  riskScore = 0,
+  version = 1
+}) => {
+  try {
+    if (!admin.apps.length) {
+      console.log("⚠️ Firebase not initialized (Firestore skip)");
+      return;
+    }
+
+    await admin
+      .firestore()
+      .collection("alerts")
+      .doc(repoId)
+      .set({
+        alerts,
+        vulnerabilities,
+        riskScore,
+        version,
+        updatedAt: new Date()
+      });
+
+    console.log("🔥 Firestore updated");
+
+    return { success: true };
+
+  } catch (err) {
+    console.log("❌ Firestore error:", err.message);
+
+    return { success: false };
   }
 };

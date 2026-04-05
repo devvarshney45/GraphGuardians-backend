@@ -47,6 +47,7 @@ export const analyzeRepo = async (req, res) => {
 
   const main = async () => {
 
+    console.log("==================================");
     console.log("📡 Scan Triggered By:",
       req.headers["x-github-event"] ? "WEBHOOK (COMMIT)" : "MANUAL (ADD REPO)"
     );
@@ -67,6 +68,7 @@ export const analyzeRepo = async (req, res) => {
     const newVersion = (repo.scanCount || 0) + 1;
 
     console.log(`🚀 SCAN START: ${repo.name}`);
+    console.log(`🆕 VERSION: ${newVersion}`);
 
     /* ========================= FETCH FILES ========================= */
     let lockfile = null;
@@ -77,12 +79,15 @@ export const analyzeRepo = async (req, res) => {
         fetchFileFromGitHub(url, "package-lock.json", token),
         fetchFileFromGitHub(url, "package.json", token)
       ]);
+      console.log("📂 Files fetched successfully");
     } catch {
       console.log("⚠️ GitHub fetch failed");
     }
 
     /* ========================= NO PACKAGE ========================= */
     if (!pkg) {
+      console.log("❌ No package.json found");
+
       const updatedRepo = await Repo.findByIdAndUpdate(
         repoId,
         {
@@ -127,6 +132,7 @@ export const analyzeRepo = async (req, res) => {
     }
 
     console.log("🌳 TREE SIZE:", tree.length);
+    console.log("🌳 TREE SAMPLE:", tree.slice(0, 3));
 
     /* ========================= UNIQUE DEPS ========================= */
     const seen = new Set();
@@ -174,6 +180,7 @@ export const analyzeRepo = async (req, res) => {
     }
 
     console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
+    console.log("🚨 SAMPLE VULN:", formattedVulns[0]);
 
     /* ========================= ALERTS ========================= */
     let alerts = [];
@@ -212,6 +219,7 @@ export const analyzeRepo = async (req, res) => {
       );
 
       console.log("📢 FINAL ALERTS:", alerts.length);
+      console.log("📢 SAMPLE ALERT:", alerts[0]);
 
       if (alerts.length > 0) {
         await Alert.insertMany(alerts);
@@ -236,10 +244,12 @@ export const analyzeRepo = async (req, res) => {
     try {
       const user = await User.findById(repo.userId);
 
+      console.log("📊 Alerts:", alerts.length);
+      console.log("👤 User token:", user?.fcmToken);
+
       if (user?.fcmToken && alerts.length > 0) {
 
         console.log("📤 Sending notification...");
-        console.log("📱 Token:", user.fcmToken);
 
         await sendNotification(
           user.fcmToken,
@@ -285,6 +295,7 @@ export const analyzeRepo = async (req, res) => {
       }));
 
     console.log("🔗 DEP EDGES:", depEdges.length);
+    console.log("🔗 SAMPLE EDGE:", depEdges[0]);
 
     await pushToTigerGraph(
       repoIdStr,
@@ -326,6 +337,7 @@ export const analyzeRepo = async (req, res) => {
     ).lean();
 
     console.log("✅ SCAN COMPLETE");
+    console.log("==================================");
 
     emitResult(
       req,

@@ -78,7 +78,6 @@ export const analyzeRepo = async (req, res) => {
       ).lean();
 
       emitResult(req, repoIdStr, updatedRepo, 0, 0, 0, []);
-
       return response.json({ success: true, repo: updatedRepo });
     }
 
@@ -213,19 +212,21 @@ export const analyzeRepo = async (req, res) => {
     console.log(`⚠️ Risk Score: ${risk}`);
 
     /* ========================= FCM NOTIFICATION ========================= */
+    // fcmTokens array use karo — single fcmToken nahi
     try {
       const user = await User.findById(repo.userId);
+      const tokens = user?.fcmTokens || [];
 
-      if (user?.fcmToken && alerts.length > 0) {
+      if (tokens.length > 0 && alerts.length > 0) {
         await sendNotification(
-          user.fcmToken,
+          tokens,                    // array pass karo directly
           "🚨 Security Alert",
-          `${alerts.length} new vulnerabilities detected`,
+          `${alerts.length} new vulnerabilities detected in ${repo.name}`,
           { repoId: repoIdStr }
         );
-        console.log("📲 FCM Notification sent");
+        console.log(`📲 FCM sent to ${tokens.length} device(s)`);
       } else {
-        console.log(`📲 FCM skipped — token: ${!!user?.fcmToken}, alerts: ${alerts.length}`);
+        console.log(`📲 FCM skipped — tokens: ${tokens.length}, alerts: ${alerts.length}`);
       }
     } catch (err) {
       console.log("❌ Push failed:", err.message);
@@ -319,3 +320,4 @@ const emitResult = (req, repoIdStr, repo, risk, deps, vulns, aiInsights = []) =>
     });
   }
 };
+

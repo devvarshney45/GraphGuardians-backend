@@ -197,22 +197,64 @@ export const githubCallback = async (req, res) => {
     }
 
     /* =========================
-       🔐 TOKEN + REDIRECT
+       🔐 GENERATE TOKEN
     ========================= */
     const token = generateToken(user._id);
 
     const FRONTEND = process.env.FRONTEND_URL || "http://localhost:5173";
 
+    /* =========================
+       🔥 INSTALLATION CHECK (MAIN LOGIC)
+    ========================= */
+    if (!user.installationId) {
+      console.log("⚠️ GitHub App NOT installed");
+
+      const installUrl =
+        `https://github.com/apps/GraphGuardians/installations/new` +
+        `?redirect_uri=${FRONTEND}/dashboard`;
+
+      console.log("➡️ Redirecting to install:", installUrl);
+
+      return res.redirect(
+        `${FRONTEND}/install?` +
+        `url=${encodeURIComponent(installUrl)}&token=${token}`
+      );
+    }
+
+    /* =========================
+       🔥 VERIFY INSTALLATION (PRO FIX)
+    ========================= */
+    try {
+      await getInstallationToken(user.installationId);
+      console.log("✅ Installation valid");
+    } catch (err) {
+      console.log("❌ Installation invalid → resetting");
+
+      user.installationId = null;
+      await user.save();
+
+      const installUrl =
+        `https://github.com/apps/GraphGuardians/installations/new` +
+        `?redirect_uri=${FRONTEND}/dashboard`;
+
+      return res.redirect(
+        `${FRONTEND}/install?` +
+        `url=${encodeURIComponent(installUrl)}&token=${token}`
+      );
+    }
+
+    /* =========================
+       🚀 NORMAL REDIRECT (ALL GOOD)
+    ========================= */
     let redirectUrl = "";
 
     if (state === "app") {
-      // ✅ FIXED (IMPORTANT)
       redirectUrl = `myapp://auth?token=${token}`;
     } else {
       redirectUrl = `${FRONTEND}/auth/success?token=${token}`;
     }
 
-    console.log("🔁 Redirecting to:", redirectUrl);
+    console.log("🚀 Redirecting to dashboard:", redirectUrl);
 
     return res.redirect(redirectUrl);
 

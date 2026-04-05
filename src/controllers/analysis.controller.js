@@ -293,9 +293,274 @@ export const analyzeRepo = async (req, res) => {
         from: d.parent.toLowerCase(),
         to: d.name.toLowerCase()
       }));
+export const analyzeRepo = async (req, res) => {
+  const TIMEOUT = 25000;
+
+  const safeRes = {
+    status: () => safeRes,
+    json: () => {}
+  };
+
+  const response = res?.status ? res : safeRes;
+
+  const main = async () => {
+
+    /* =========================
+       🔥 SAFE WEBHOOK CHECK (FIXED)
+    ========================= */
+    const isWebhook = req?.headers?.["x-github-event"];
+
+    console.log("==================================");
+    console.log("📡 Scan Triggered By:",
+      isWebhook ? "WEBHOOK (COMMIT)" : "MANUAL (ADD REPO)"
+    );
+
+    const { url, repoId, token } = req.body;
+
+    const repo = await Repo.findById(repoId);
+    if (!repo) return response.status(404).json({ msg: "Repo not found" });
+
+    /* =========================
+       🔐 SAFE AUTH CHECK (FIXED)
+    ========================= */
+    if (req.user && repo.userId.toString() !== req.user.id) {
+      return response.status(403).json({ msg: "Unauthorized" });
+    }
+
+    const repoIdStr = String(repoId);
+
+    await Repo.findByIdAndUpdate(repoId, { status: "scanning" });
+
+    const newVersion = (repo.scanCount || 0) + 1;
+
+    console.log(`🚀 SCAN START: ${repo.name}`);
+    console.log(`🆕 VERSION: ${newVersion}`);
+
+    /* ========================= FETCH FILES ========================= */
+    let lockfile = null;
+    let pkg = null;
+
+    try {
+      [lockfile, pkg] = await Promise.all([
+        fetchFileFromGitHub(url, "package-lock.json", token),
+        fetchFileFromGitHub(url, "package.json", token)
+      ]);
+      console.log("📂 Files fetched successfully");
+    } catch {
+      console.log("⚠️ GitHub fetch failed");
+    }
+
+    /* ========================= NO PACKAGE ========================= */
+    if (!pkg) {
+      console.log("❌ No package.json found");
+
+      const updatedRepo = await Repo.findByIdAndUpdate(
+        repoId,
+        {
+          scanCount: newVersion,
+          riskScore: 0,
+          dependencyCount: 0,
+          vulnerabilityCount: 0,
+          lastScanned: new Date(),
+          status: "scanned"
+        },
+        { new: true }
+      ).lean();
+
+      emitResult(req, repoIdStr, updatedRepo, 0, 0, 0, []);
+
+      return response.json({
+        success: true,
+        repo: updatedRepo
+      });
+    }
+
+    /* ========================= TREE ========================= */
+    let tree = [];
+
+    try {
+      if (lockfile?.packages || lockfile?.dependencies) {
+        console.log("✅ LOCKFILE MODE");
+        tree = buildTreeFromLockfile(lockfile);
+      } else {
+        console.log("⚠️ FALLBACK MODE");
+
+        const deps = pkg.dependencies || {};
+
+        tree = Object.entries(deps).map(([name, version]) => ({
+          name,
+          version: version || "latest",
+          parent: null
+        }));
+      }
+    } catch {
+      console.log("⚠️ Tree build failed");
+    }
+
+    console.log("🌳 TREE SIZE:", tree.length);
+    console.log("🌳 TREE SAMPLE:", tree.slice(0, 3));
+
+    /* ========================= UNIQUE DEPS ========================= */
+    const seen = new Set();
+
+    const uniqueDeps = tree
+      .filter(d => {
+        const key = `${d.name}@${d.version}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map(d => ({
+        repoId: repoIdStr,
+        versionGroup: newVersion,
+        name: d.name.toLowerCase(),
+        version: String(d.version || "unknown"),
+        parent: d.parent ? d.parent.toLowerCase() : null,
+        type: "prod"
+      }));
+
+    console.log(`📦 Dependencies Saved: ${uniqueDeps.length}`);
+
+    await Dependency.insertMany(uniqueDeps, { ordered: false }).catch(() => {});
+
+    /* ========================= VULNERABILITIES ========================= */
+    let formattedVulns = [];
+
+    try {
+      const vulns = await checkVulnerabilities(uniqueDeps);
+
+      formattedVulns = vulns.map(v => ({
+        repoId: repoIdStr,
+        versionGroup: newVersion,
+        package: v.package?.toLowerCase(),
+        version: String(v.version || ""),
+        severity: normalizeSeverity(v.severity),
+        cve: v.cve,
+        fix: v.fix,
+        description: v.description || ""
+      }));
+
+      await Vulnerability.insertMany(formattedVulns, { ordered: false }).catch(() => {});
+    } catch {
+      console.log("⚠️ Vulnerability check failed");
+    }
+
+    console.log(`🚨 Vulnerabilities: ${formattedVulns.length}`);
+    console.log("🚨 SAMPLE VULN:", formattedVulns[0]);
+
+    /* ========================= ALERTS ========================= */
+    let alerts = [];
+
+    try {
+      const repoObjectId = repo._id;
+
+      const safeVulns = formattedVulns.filter(v => v.package && v.severity);
+
+      let newVulns = [];
+      let fixedVulns = [];
+
+      if (newVersion === 1) {
+        console.log("🟢 FIRST SCAN");
+        newVulns = safeVulns;
+      } else {
+        console.log("🔵 DIFF SCAN");
+
+        const previousVulns = await Vulnerability.find({
+          repoId: repoIdStr,
+          versionGroup: newVersion - 1
+        }).lean();
+
+        newVulns = findNewVulnerabilities(previousVulns, safeVulns);
+        fixedVulns = findFixedVulnerabilities(previousVulns, safeVulns);
+
+        console.log("🆕 NEW:", newVulns.length);
+        console.log("✅ FIXED:", fixedVulns.length);
+      }
+
+      alerts = generateAlerts(repoObjectId, newVulns, fixedVulns);
+
+      alerts = alerts.filter(a =>
+        a.package &&
+        ["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(a.severity)
+      );
+
+      console.log("📢 FINAL ALERTS:", alerts.length);
+      console.log("📢 SAMPLE ALERT:", alerts[0]);
+
+      if (alerts.length > 0) {
+        await Alert.insertMany(alerts);
+        console.log("✅ ALERTS SAVED");
+      }
+
+    } catch (err) {
+      console.log("❌ ALERT ERROR:", err.message);
+    }
+
+    /* ========================= AI ========================= */
+    let aiInsights = [];
+
+    try {
+      aiInsights = await generateAIInsights(formattedVulns.slice(0, 5));
+      console.log("🤖 AI GENERATED");
+    } catch {
+      console.log("⚠️ AI failed");
+    }
+
+    /* ========================= PUSH NOTIFICATION ========================= */
+    try {
+      const user = await User.findById(repo.userId);
+
+      console.log("📊 Alerts:", alerts.length);
+      console.log("👤 User token:", user?.fcmToken);
+
+      if (user?.fcmToken && alerts.length > 0) {
+
+        console.log("📤 Sending notification...");
+
+        await sendNotification(
+          user.fcmToken,
+          "🚨 Security Alert",
+          `${alerts.length} new vulnerabilities detected`,
+          { repoId: repoIdStr }
+        );
+
+        console.log("📲 Notifications sent SUCCESS");
+
+      } else {
+        console.log("⚠️ Notification skipped");
+      }
+
+    } catch (err) {
+      console.log("❌ Push failed:", err.message);
+    }
+
+    /* ========================= FIRESTORE ========================= */
+    try {
+      console.log("🔥 Writing to Firestore...");
+
+      await writeToFirestore({
+        repoId: repoIdStr,
+        alerts,
+        vulnerabilities: formattedVulns,
+        riskScore: calculateRisk(formattedVulns),
+        version: newVersion
+      });
+
+      console.log("🔥 Firestore updated SUCCESS");
+
+    } catch (err) {
+      console.log("❌ Firestore write failed:", err.message);
+    }
+
+    /* ========================= TIGERGRAPH ========================= */
+    const depEdges = tree
+      .filter(d => d.parent)
+      .map(d => ({
+        from: d.parent.toLowerCase(),
+        to: d.name.toLowerCase()
+      }));
 
     console.log("🔗 DEP EDGES:", depEdges.length);
-    console.log("🔗 SAMPLE EDGE:", depEdges[0]);
 
     await pushToTigerGraph(
       repoIdStr,
